@@ -3,3 +3,4 @@ build/
 measurements/*.csv
 .DS_Store
 engines/
+build.log
