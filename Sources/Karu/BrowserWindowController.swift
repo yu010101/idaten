@@ -253,7 +253,12 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         if tab.webView == nil {   // 休眠からの復帰
             let wv = makeWebView(tab)
             tab.handedToChromium = false
-            if let url = tab.url, url.absoluteString != "about:blank" { wv.load(URLRequest(url: url)) }
+            if let state = tab.interactionState {
+                wv.interactionState = state   // 代入すると現在の項目を自分で読み込む
+                tab.interactionState = nil
+            } else if let url = tab.url, url.absoluteString != "about:blank" {
+                wv.load(URLRequest(url: url))
+            }
         }
         if let wv = tab.webView {
             wv.translatesAutoresizingMaskIntoConstraints = false
@@ -291,7 +296,20 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         hibernateTimer?.invalidate()
         guard settings.hibernateMinutes > 0 else { return }
         hibernateTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in self?.hibernateIdleTabs() }
+        // メモリが逼迫したら、時間を待たずに選択中以外を眠らせる(DuckDuckGo の TabSuspensionService と同じ契機)。
+        // 再生中・入力中のタブは force しないので残る
+        let source = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .main)
+        source.setEventHandler { [weak self] in
+            guard let self else { return }
+            for tab in self.tabs where tab !== self.selected && tab.webView != nil
+                && Date().timeIntervalSince(tab.lastActive) > 60 {
+                self.hibernate(tab, force: false)
+            }
+        }
+        source.resume()
+        memoryPressure = source
     }
+    private var memoryPressure: DispatchSourceMemoryPressure?
 
     private func hibernateIdleTabs() {
         let limit = TimeInterval(settings.hibernateMinutes * 60)
@@ -316,7 +334,9 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
             let info = result as? [String: Any] ?? [:]
             let busy = (info["playing"] as? Bool ?? false) || (info["editing"] as? Bool ?? false)
             if busy && !force { tab.lastActive = Date(); return }
-            tab.savedScrollY = info["y"] as? Double ?? 0
+            tab.interactionState = wv.interactionState
+            // interactionState が取れなかったときだけ、URL再読込+スクロール位置で代用する
+            tab.savedScrollY = tab.interactionState == nil ? (info["y"] as? Double ?? 0) : 0
             tab.dropWebView()
             self.rebuildTabBar()
         }
@@ -405,6 +425,56 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
     /// 広告遮断の効果は、adBlockEnabled を変えて report.json の resourceHosts を比べて測る(WKContentRuleList は遮断件数を通知しない)。
     var selfTestDir: URL?
     private var selfTestFired = false
+
+    /// --selftest-hibernate: タブAを1500pxスクロール → タブBを開く → Aを強制休眠 → Aへ戻る → URLとスクロール位置が戻ったかを
+    /// hibernate.json に書いて終了する
+    var selfTestHibernate = false
+    private var hibStep = 0
+    private weak var hibTabA: Tab?
+    private var hibURLBefore = ""
+
+    private func advanceHibernateTest(_ tab: Tab, _ wv: WKWebView, dir: URL) {
+        switch hibStep {
+        case 0:   // A の読み込み完了
+            hibStep = 1; hibTabA = tab
+            wv.evaluateJavaScript("window.scrollTo(0, 1500); location.href") { [self] r, _ in
+                hibURLBefore = r as? String ?? ""
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [self] in
+                    newTab(url: URL(string: "https://example.com/"))
+                }
+            }
+        case 1:   // B の読み込み完了 → A を眠らせて、戻る
+            guard tab !== hibTabA, let a = hibTabA else { return }
+            hibStep = 2
+            hibernate(a, force: true)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [self] in
+                let wasHibernated = a.isHibernated
+                let hadState = a.interactionState != nil
+                hibStep = wasHibernated ? 3 : 99
+                hibReport = ["hibernated": wasHibernated, "hadInteractionState": hadState]
+                select(a)
+            }
+        case 3:   // A の復帰完了
+            guard tab === hibTabA else { return }
+            hibStep = 4
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [self] in
+                wv.evaluateJavaScript("({ y: window.scrollY, url: location.href })") { [self] r, _ in
+                    let info = r as? [String: Any] ?? [:]
+                    hibReport["urlBefore"] = hibURLBefore
+                    hibReport["urlAfter"] = info["url"] as? String ?? ""
+                    hibReport["scrollYAfter"] = info["y"] as? Double ?? -1
+                    hibReport["scrollYExpected"] = 1500
+                    if let data = try? JSONSerialization.data(withJSONObject: hibReport, options: [.prettyPrinted, .sortedKeys]) {
+                        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                        try? data.write(to: dir.appendingPathComponent("hibernate.json"))
+                    }
+                    NSApp.terminate(nil)
+                }
+            }
+        default: break
+        }
+    }
+    private var hibReport: [String: Any] = [:]
 
     private func runSelfTest(_ wv: WKWebView, dir: URL) {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -507,7 +577,9 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         }
         if tab === selected { progress.isHidden = true }
         saveSession()
-        if let dir = selfTestDir, !selfTestFired, tab === selected {
+        if let dir = selfTestDir, selfTestHibernate {
+            advanceHibernateTest(tab, webView, dir: dir)
+        } else if let dir = selfTestDir, !selfTestFired, tab === selected {
             selfTestFired = true
             // 遅延読み込みの広告・計測が出そろうのを待つ
             DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in self?.runSelfTest(webView, dir: dir) }

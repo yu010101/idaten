@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let i = args.firstIndex(of: "--selftest"), args.indices.contains(i + 1) {
             browser.selfTestDir = URL(fileURLWithPath: args[i + 1], isDirectory: true)
         }
+        if args.contains("--selftest-hibernate") { browser.selfTestHibernate = true }
         if args.contains("--no-adblock") { browser.settings.adBlockEnabled = false }   // この起動だけ。設定ファイルは書き換えない
         browser.start(openURLs: argURLs + pendingURLs)
         pendingURLs = []

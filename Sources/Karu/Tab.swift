@@ -8,6 +8,9 @@ final class Tab: NSObject {
     var webView: WKWebView?
     var lastActive = Date()
     var savedScrollY = 0.0
+    /// 休眠時に退避した WKWebView.interactionState(戻る/進むの履歴・スクロール位置・フォーム状態)。
+    /// Kestrel(MIT)と DuckDuckGo(Apache-2.0)が同じ方式。URL だけ覚えて読み直すより復元が忠実
+    var interactionState: Any?
     /// ⌘⇧E で Chromium 側へ渡したタブ。WebKit 側は休眠させて印だけ残す
     var handedToChromium = false
     var observations: [NSKeyValueObservation] = []

@@ -24,14 +24,32 @@
 - [ ] サイト別ルール `engine_rules.json`
 - [ ] 段B: CEF埋め込み実験(1日で打ち切り・採否理由を記録)
 
-## Phase 3 — Karu本体(Swift+WebKit)
-- [ ] タブ / URLバー / 戻る進む再読込 / ショートカット
-- [ ] 履歴(SQLite)/ ダウンロード
-- [ ] 広告遮断(EasyList+AdGuard Japanese → WKContentRuleList、変換器のライセンス一次確認)
-- [ ] タブ休眠
-- [ ] エンジン切替 ⌘⇧E + Cookie非共有の明示
+## Phase 3 — Karu本体(Swift+WebKit) ※完成・運用実績ゼロ
+- [x] タブ / URLバー / 戻る進む再読込 / ショートカット — 09-19 `--selftest` で描画確認(ui.png / web.png)。手での操作確認は未
+- [x] 履歴(SQLite)/ ダウンロード — 実装済。ダウンロードと履歴補完UIは未検証(補完は記録のみでUIなし)
+- [~] 広告遮断 — 種リスト38ドメインは実測で効いた(ITmedia 231→122・広告系38→0 / Yahoo!ニュース 128→108・8→0、各1回)。
+      EasyList+AdGuard Japanese の変換は未着手。調査結果(09-19): SafariConverterLib(GPL-3.0、活発)/ adblock-rust(MPL-2.0、Rust+FFI要)の二択。
+      配布ライセンスを先に決めるまでは**外部プロセスとして変換だけ使い、コードは混ぜない**(取り込むとGPL-3.0が波及する)。
+      YouTube広告はルールリストだけでは部分的(AdGuard公式の立場)→ 別途スクリプト注入 or Chromiumタブへ回す判断が要る。`rules/*.json` の口は実装済
+- [x] タブ休眠 — 09-19 `webView.interactionState` 退避方式に変更(Kestrel/DuckDuckGoと同型)。
+      実測: Wikipedia random で休眠→復帰後、URL・スクロール位置(1500px)とも完全一致(`--selftest-hibernate`)。
+      メモリ逼迫時(`DispatchSource.makeMemoryPressureSource`)も選択中以外を眠らせるよう追加(DuckDuckGoのTabSuspensionServiceと同じ契機)
+- [x] エンジン切替(段A)— 09-19 テストルールで確認: Karu の子として Chrome が `--user-data-dir=…/Karu/chromium-profile` で起動、既存Chrome(別pid)は無傷。⌘⇧E のダイアログ経路は手での確認が未
+- [x] 計器の WebKit 対応 — WebContent/GPU/Networking(ppid=1)3つを responsible pid で全数捕捉(/bin/ps の全数と照合)
 - [ ] 実験: WKWebExtensionController
-- [ ] `make_app.sh`(~/aiboard から型を流用)
+- [x] `make_app.sh` — build/Karu.app 392K。`--install` は未実行(~/Applications へは置いていない)
+
+## 注意(09-19)
+- ディスク空きが 16GB → 10GB に減った(私の成果物は約100MB。原因は別プロセスで未特定)。Phase 1 のエンジン導入(約1.5GB)はゲート8GBに近いので保留。
+- safety-guard が PID 直指定の kill を止める。テストで開いた Karu 管理下の Chrome(専用プロファイル、pid 7773, example.org)を**本人が手で閉じるか、killしてよいと承認するまで開いたまま**。既存の本チャンChrome(pid 32082)は無傷。
+
+## OSS/類似事例 調査(09-19、10エージェント・反証込み、40件中28件が反証を通過)
+- **段Aの第一候補はHelium**(imputnet/helium-macos)。arm64 dmg 120MB・広告遮断内蔵・CWS拡張フル対応・2026-09-18リリース・GPL-3.0(同梱せず検出起動なので波及しない)。Brave/ungoogled-chromium/Thoriumはそれぞれ機能無効化に管理者権限が要る/CWS直接不可/主メンテナ不在で劣る。
+- **`defaults write`での軽量化は不採用**(反証で判明)。Chromium公式が recommendedレベル止まり・本番非推奨と明記。専用プロファイルの起動フラグ+初期Preferencesで代替。
+- **段B(CEF同一ウィンドウ埋め込み)は優先度を下げる**。唯一の実例 cmux(★2.7万)のPRは当日revertされWebKit専用に戻った。Chrome style限定で拡張が動く点はCEF公式どおりだが「成立した前例」は無い。実験は最後に回す。
+- **WKWebExtensionでの拡張全対応は狙わない**(既定方針の再確認)。Kagi Orion(6人・6年・非OSS)でも公式値で約70%対応。declarativeNetRequestは0%。この限界の上でも段A/段Bの分担は妥当。
+- 需要の傍証: cmuxに「WebKit⇔Chromiumのタブ切替が欲しい」という要望issueが立っている(#2803、Open)。同種のOSSは見つからなかった=Karuの立ち位置に競合なし。
+- 詳細と全URL(発見40件+反証40件、[OK]/[NG]/[??]付き): `docs/prior-art-research-2026-09-19.txt`
 
 ## Phase 4 — 比較と報告
 - [ ] 現行Chrome / Karu(WebKit)/ Karu(混在)の比較表
