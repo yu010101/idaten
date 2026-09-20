@@ -41,9 +41,9 @@ final class EngineRules {
 /// 既存の Chrome プロファイルには触れない — 必ず Karu 専用の --user-data-dir を使う。
 ///
 /// **KaruのプロファイルごとにChromium側の --user-data-dir も別**にする。実測(2026-09-20)で判明した通り、
-/// 本人のChrome 15プロファイルの過半数は「拡張ゼロ・アカウント分離が目的」で、
+/// 本人のChrome複数プロファイルの過半数は「拡張ゼロ・アカウント分離が目的」で、
 /// crypto walletなど一部拡張(Phantom/Solflare)はプロファイル固有の前提を持つため、
-/// Karu側の身元(radineer.com用/wiseman.holdings用等)とChromium側の身元を1対1に対応させないと、
+/// Karu側の身元(個人用/仕事用等)とChromium側の身元を1対1に対応させないと、
 /// 渡した先でログインし直しが要る問題が余計に増える。
 final class ChromiumProcessEngine {
     struct Candidate: Codable { var name: String; var appPath: String }
