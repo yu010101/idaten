@@ -5,12 +5,15 @@ enum EngineKind: String, Codable {
     case chromium    // 拡張が要る作業用
 }
 
-/// 「このドメインは常にChromium」。サブドメインも含めて後方一致で判定する
+/// 「このドメインは常にChromium」。サブドメインも含めて後方一致で判定する。
+/// **プロファイルごと**に持つ(暗号資産ウォレット等、プロファイルによって前提が違うため)
 final class EngineRules {
     private(set) var chromiumDomains: Set<String> = []
+    private let path: URL
 
-    init() {
-        if let data = try? Data(contentsOf: Paths.engineRules),
+    init(path: URL) {
+        self.path = path
+        if let data = try? Data(contentsOf: path),
            let obj = try? JSONDecoder().decode([String: [String]].self, from: data) {
             chromiumDomains = Set(obj["chromium"] ?? [])
         }
@@ -28,7 +31,7 @@ final class EngineRules {
         let enc = JSONEncoder()
         enc.outputFormatting = [.prettyPrinted, .sortedKeys]
         if let data = try? enc.encode(["chromium": chromiumDomains.sorted()]) {
-            try? data.write(to: Paths.engineRules, options: .atomic)
+            try? data.write(to: path, options: .atomic)
         }
     }
 }
@@ -36,6 +39,12 @@ final class EngineRules {
 /// 段A: 管理下のChromium系ブラウザを専用プロファイルで起動し、URLを渡す。
 /// エンジン本体は同梱しない(GPLバイナリを再配布しない)。入っているものを上から順に探す。
 /// 既存の Chrome プロファイルには触れない — 必ず Karu 専用の --user-data-dir を使う。
+///
+/// **KaruのプロファイルごとにChromium側の --user-data-dir も別**にする。実測(2026-09-20)で判明した通り、
+/// 本人のChrome 15プロファイルの過半数は「拡張ゼロ・アカウント分離が目的」で、
+/// crypto walletなど一部拡張(Phantom/Solflare)はプロファイル固有の前提を持つため、
+/// Karu側の身元(radineer.com用/wiseman.holdings用等)とChromium側の身元を1対1に対応させないと、
+/// 渡した先でログインし直しが要る問題が余計に増える。
 final class ChromiumProcessEngine {
     struct Candidate: Codable { var name: String; var appPath: String }
 
@@ -48,9 +57,11 @@ final class ChromiumProcessEngine {
     static let defaultFlags = ["--no-first-run", "--no-default-browser-check"]
 
     let candidates: [Candidate]
+    private let profileDir: URL
     private var running: Process?
 
-    init() {
+    init(profileDir: URL) {
+        self.profileDir = profileDir
         if let data = try? Data(contentsOf: Paths.engineConfig),
            let c = try? JSONDecoder().decode([Candidate].self, from: data), !c.isEmpty {
             candidates = c
@@ -89,10 +100,10 @@ final class ChromiumProcessEngine {
     @discardableResult
     func open(_ url: URL) -> Result<String, EngineError> {
         guard let (cand, exe) = resolve() else { return .failure(.notInstalled(candidates.map(\.name))) }
-        try? FileManager.default.createDirectory(at: Paths.chromiumProfile, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: profileDir, withIntermediateDirectories: true)
         let p = Process()
         p.executableURL = exe
-        p.arguments = ["--user-data-dir=\(Paths.chromiumProfile.path)"] + flags() + [url.absoluteString]
+        p.arguments = ["--user-data-dir=\(profileDir.path)"] + flags() + [url.absoluteString]
         p.standardOutput = FileHandle.nullDevice
         p.standardError = FileHandle.nullDevice
         do { try p.run() } catch { return .failure(.launchFailed(String(describing: error))) }

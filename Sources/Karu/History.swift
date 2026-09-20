@@ -3,12 +3,12 @@ import SQLite3
 
 private let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
-/// 閲覧履歴。URLバーの補完に使う
+/// 閲覧履歴。URLバーの補完に使う。プロファイルごとに別ファイル
 final class History {
     private var db: OpaquePointer?
 
-    init() {
-        guard sqlite3_open(Paths.history.path, &db) == SQLITE_OK else { db = nil; return }
+    init(path: URL) {
+        guard sqlite3_open(path.path, &db) == SQLITE_OK else { db = nil; return }
         sqlite3_exec(db, """
             CREATE TABLE IF NOT EXISTS visits(id INTEGER PRIMARY KEY, url TEXT NOT NULL, title TEXT, ts REAL NOT NULL);
             CREATE INDEX IF NOT EXISTS visits_ts ON visits(ts);

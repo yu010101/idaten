@@ -1,6 +1,9 @@
 import Foundation
 
-/// 個人パスを埋め込まない。利用者ごとのデータは全部ここの下に置く(配布に耐える構造)
+/// 個人パスを埋め込まない。利用者ごとのデータは全部ここの下に置く(配布に耐える構造)。
+/// ここにあるのは**プロファイル非依存**のもの(広告フィルタ本体・Chromium候補設定・起動フラグ・アプリ全体設定・
+/// プロファイル一覧そのもの)だけ。Cookie・履歴・セッション・エンジンルールはプロファイルごとに分かれるので
+/// `ProfilePaths`(Profile.swift)を使う
 enum Paths {
     static let support: URL = {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -9,12 +12,8 @@ enum Paths {
         return dir
     }()
     static var settings: URL { support.appendingPathComponent("settings.json") }
-    static var engineRules: URL { support.appendingPathComponent("engine_rules.json") }
     static var engineConfig: URL { support.appendingPathComponent("engine.json") }
     static var chromiumFlags: URL { support.appendingPathComponent("chromium_flags.txt") }
-    static var chromiumProfile: URL { support.appendingPathComponent("chromium-profile", isDirectory: true) }
-    static var history: URL { support.appendingPathComponent("history.sqlite") }
-    static var session: URL { support.appendingPathComponent("session.json") }
     static var rulesDir: URL {
         let d = support.appendingPathComponent("rules", isDirectory: true)
         try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
@@ -30,6 +29,9 @@ struct Settings: Codable {
     /// WKWebView 既定のUAには Version/Safari が無く、一部サイトが簡易版を返す
     var userAgentSuffix = "Version/26.0 Safari/605.1.15"
     var adBlockEnabled = true
+    /// ページ内容から「Chrome拡張が要りそうか」をAppleの端末内モデルで判定し、Chromiumへの切替を提案する。
+    /// macOS 26未満やApple Intelligence未有効の環境では判定自体が走らないので、この設定はONのままで害が無い
+    var aiEngineSuggestEnabled = true
 
     init() {}
     init(from decoder: Decoder) throws {
@@ -40,6 +42,7 @@ struct Settings: Codable {
         hibernateMinutes = try c.decodeIfPresent(Int.self, forKey: .hibernateMinutes) ?? d.hibernateMinutes
         userAgentSuffix = try c.decodeIfPresent(String.self, forKey: .userAgentSuffix) ?? d.userAgentSuffix
         adBlockEnabled = try c.decodeIfPresent(Bool.self, forKey: .adBlockEnabled) ?? d.adBlockEnabled
+        aiEngineSuggestEnabled = try c.decodeIfPresent(Bool.self, forKey: .aiEngineSuggestEnabled) ?? d.aiEngineSuggestEnabled
     }
 
     static func load() -> Settings {

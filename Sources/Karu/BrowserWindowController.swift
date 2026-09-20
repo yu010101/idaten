@@ -5,10 +5,14 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
     WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate {
 
     let window: NSWindow
+    let profile: Profile
+    let paths: ProfilePaths
     var settings = Settings.load()
-    let rules = EngineRules()
-    let chromium = ChromiumProcessEngine()
-    let history = History()
+    let rules: EngineRules
+    let chromium: ChromiumProcessEngine
+    let history: History
+    /// このプロファイル専用のCookie/localStorage/認証状態。他プロファイルとは完全に別の身元になる
+    let dataStore: WKWebsiteDataStore
 
     private(set) var tabs: [Tab] = []
     private(set) var selected: Tab?
@@ -24,14 +28,20 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
     private let container = NSView()
     private var hibernateTimer: Timer?
 
-    override init() {
+    init(profile: Profile) {
+        self.profile = profile
+        self.paths = ProfilePaths(profile: profile)
+        self.rules = EngineRules(path: paths.engineRules)
+        self.chromium = ChromiumProcessEngine(profileDir: paths.chromiumProfile)
+        self.history = History(path: paths.history)
+        self.dataStore = WKWebsiteDataStore(forIdentifier: profile.dataStoreIdentifier)
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 860),
                           styleMask: [.titled, .closable, .miniaturizable, .resizable],
                           backing: .buffered, defer: false)
         super.init()
-        window.title = "Karu"
+        window.title = "Karu — \(profile.name)"
         window.delegate = self
-        window.setFrameAutosaveName("KaruMainWindow")
+        window.setFrameAutosaveName("KaruWindow-\(profile.id)")
         window.isReleasedWhenClosed = false
         buildUI()
     }
@@ -128,6 +138,11 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
     /// 広告遮断のルールを読み終えてからタブを開く(最初のページが素通しにならないように)
     func start(openURLs: [URL]) {
         let begin: () -> Void = { [self] in
+            if let domain = selfTestSetCookieDomain {
+                let cookie = HTTPCookie(properties: [.domain: domain, .path: "/", .name: "karu_isolation_probe",
+                                                     .value: profile.id, .expires: Date().addingTimeInterval(3600)])!
+                dataStore.httpCookieStore.setCookie(cookie, completionHandler: nil)
+            }
             restoreSession()
             for u in openURLs { newTab(url: u) }
             if tabs.isEmpty { newTab(url: URL(string: settings.homepage)) }
@@ -187,6 +202,7 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
 
     private func makeConfiguration() -> WKWebViewConfiguration {
         let conf = WKWebViewConfiguration()
+        conf.websiteDataStore = dataStore   // このプロファイル専用のCookie/ログイン状態
         conf.applicationNameForUserAgent = settings.userAgentSuffix
         conf.preferences.isElementFullscreenEnabled = true
         for l in ruleLists { conf.userContentController.add(l) }
@@ -364,6 +380,27 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         updateToolbar()
     }
 
+    /// AI(端末内モデル)が「拡張機能が要りそう」と判定したドメインに、確認の上で切替を提案する。
+    /// switchEngine() と違い利用者からの明示操作ではないので、常に確認ダイアログを挟み、既定は「このまま」側にする
+    private func offerAIEngineSwitch(host: String, tab: Tab) {
+        guard tab === selected, tab.url?.host == host else { return }   // 判定が終わる頃には別タブに移っているかもしれない
+        let alert = NSAlert()
+        alert.messageText = "このサイトは拡張機能が必要かもしれません"
+        alert.informativeText = "\(host) の内容を端末内のAIが見て、Chrome拡張機能を前提にしている可能性が高いと判定しました。"
+            + "Chromiumエンジンで開き直しますか?(Cookie・ログイン状態は引き継がれません)"
+        alert.addButton(withTitle: "Chromiumで開く")
+        alert.addButton(withTitle: "このまま")
+        let check = NSButton(checkboxWithTitle: "\(host) は常に Chromium で開く", target: nil, action: nil)
+        alert.accessoryView = check
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        rules.setChromium(host, check.state == .on)
+        if handOff(tab.url!) {
+            tab.handedToChromium = true
+            if tabs.count > 1 { hibernate(tab, force: true) }
+        }
+        updateToolbar()
+    }
+
     @discardableResult
     private func handOff(_ url: URL) -> Bool {
         switch chromium.open(url) {
@@ -425,6 +462,9 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
     /// 広告遮断の効果は、adBlockEnabled を変えて report.json の resourceHosts を比べて測る(WKContentRuleList は遮断件数を通知しない)。
     var selfTestDir: URL?
     private var selfTestFired = false
+    /// --selftest-set-cookie <domain>: 自己検査の前に、このプロファイルのデータストアへ検証用Cookieを1個仕込む。
+    /// 別プロファイルで同じドメインを検査したとき見えなければ、プロファイル間でCookieが分離できている証拠になる
+    var selfTestSetCookieDomain: String?
 
     /// --selftest-hibernate: タブAを1500pxスクロール → タブBを開く → Aを強制休眠 → Aへ戻る → URLとスクロール位置が戻ったかを
     /// hibernate.json に書いて終了する
@@ -493,7 +533,8 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
             try { var h = new URL(e.name).host; hosts[h] = (hosts[h] || 0) + 1; } catch (err) {}
           });
           return { title: document.title, url: location.href, resources: performance.getEntriesByType('resource').length,
-                   resourceHosts: hosts, textLength: (document.body ? document.body.innerText.length : 0) };
+                   resourceHosts: hosts, textLength: (document.body ? document.body.innerText.length : 0),
+                   userAgent: navigator.userAgent };
         })()
         """
         wv.evaluateJavaScript(js) { [self] result, error in
@@ -501,12 +542,20 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
             report["tabs"] = tabs.count
             report["ruleLists"] = ruleLists.count
             report["adBlockEnabled"] = settings.adBlockEnabled
-            if let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) {
-                try? data.write(to: dir.appendingPathComponent("report.json"))
-            }
-            wv.takeSnapshot(with: nil) { image, _ in
-                if let image, let data = png(image) { try? data.write(to: dir.appendingPathComponent("web.png")) }
-                NSApp.terminate(nil)
+            // HttpOnly(JS から見えない)ログイン用Cookieも含めて、実際にディスクへ持続しているストアの中身を数える。
+            // 値そのものは書き出さない(ドメインと件数だけ) — 認証情報をログに残さないため
+            wv.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies in
+                var perDomain: [String: Int] = [:]
+                for c in cookies { perDomain[c.domain, default: 0] += 1 }
+                report["cookieDomains"] = perDomain
+                report["cookieTotal"] = cookies.count
+                if let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) {
+                    try? data.write(to: dir.appendingPathComponent("report.json"))
+                }
+                wv.takeSnapshot(with: nil) { image, _ in
+                    if let image, let data = png(image) { try? data.write(to: dir.appendingPathComponent("web.png")) }
+                    NSApp.terminate(nil)
+                }
             }
         }
     }
@@ -521,14 +570,14 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         }
         let idx = selected.flatMap { s in tabs.firstIndex(where: { $0 === s }) } ?? 0
         if let data = try? JSONEncoder().encode(Session(tabs: st, selected: idx)) {
-            try? data.write(to: Paths.session, options: .atomic)
+            try? data.write(to: paths.session, options: .atomic)
         }
     }
 
     /// 復元したタブは選択中の1枚以外すべて休眠のまま — 起動直後のメモリを抑える
     private func restoreSession() {
         if selfTestDir != nil { return }
-        guard let data = try? Data(contentsOf: Paths.session),
+        guard let data = try? Data(contentsOf: paths.session),
               let s = try? JSONDecoder().decode(Session.self, from: data), !s.tabs.isEmpty else { return }
         for t in s.tabs {
             guard let u = URL(string: t.url) else { continue }
@@ -537,9 +586,13 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         if !tabs.isEmpty { select(tabs[min(max(0, s.selected), tabs.count - 1)]) }
     }
 
+    /// プロファイルウィンドウが1つ閉じても、他のプロファイルのウィンドウが残っていればアプリは終了しない。
+    /// 終了判定自体は AppKit の `applicationShouldTerminateAfterLastWindowClosed`(main.swift)に任せる
+    var onClosed: (() -> Void)?
+
     func windowWillClose(_ notification: Notification) {
         saveSession()
-        NSApp.terminate(nil)
+        onClosed?()
     }
 
     // MARK: - WKNavigationDelegate
@@ -583,6 +636,29 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
             selfTestFired = true
             // 遅延読み込みの広告・計測が出そろうのを待つ
             DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in self?.runSelfTest(webView, dir: dir) }
+        } else if selfTestDir == nil {
+            checkIfNeedsChromium(webView, tab: tab)
+        }
+    }
+
+    /// ホストごとに1回だけ、AI(端末内モデル)に「拡張機能が要りそうか」を判定させる。
+    /// 通信は発生しない(Appleの共有モデルのみ)。判定できない環境では即座に何もしない
+    private var aiCheckedHosts: Set<String> = []
+    private func checkIfNeedsChromium(_ webView: WKWebView, tab: Tab) {
+        guard settings.aiEngineSuggestEnabled, AIEngineAdvisor.isAvailable(),
+              let url = webView.url, let host = url.host,
+              url.scheme == "http" || url.scheme == "https",
+              rules.engine(forHost: host) != .chromium,
+              !aiCheckedHosts.contains(host) else { return }
+        aiCheckedHosts.insert(host)
+        webView.evaluateJavaScript("document.body ? document.body.innerText.slice(0, 600) : ''") { [weak self, weak webView] result, _ in
+            guard let self, let webView, let text = result as? String, !text.isEmpty else { return }
+            Task { @MainActor in
+                let suggest = await AIEngineAdvisor.suggestsChromiumEngine(pageText: text, url: url.absoluteString)
+                guard suggest, webView.url?.host == host,
+                      let tab = self.tabs.first(where: { $0.webView === webView }) else { return }
+                self.offerAIEngineSwitch(host: host, tab: tab)
+            }
         }
     }
 
