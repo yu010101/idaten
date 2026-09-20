@@ -310,6 +310,9 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         }
         rebuildTabBar()
         updateToolbar()
+        // 60秒の定期チェックを待たず、タブを切り替える/増やすその瞬間に予算を適用する。
+        // 大量タブを一気に開いた直後も遅れずに効かせるため(Codexとの検討で優先度最高と一致)
+        enforceAwakeBudget()
     }
 
     func close(_ tab: Tab) {
@@ -352,6 +355,19 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         for tab in tabs where tab !== selected && tab.webView != nil && Date().timeIntervalSince(tab.lastActive) > limit {
             hibernate(tab, force: false)
         }
+        enforceAwakeBudget()
+    }
+
+    /// 「大量タブ」対策の本命(Codexとの独立検討でも一致): アイドル時間を待たず、
+    /// 起きている背景タブの数そのものに上限を設ける。DuckDuckGoのTabLazyLoaderと同じ発想。
+    /// 超えた分は最終アクティブが古い順に休眠対象へ回す(force:false なので再生中・入力中のタブは
+    /// 予算を超えても残る — 動画・会議のタブを枠の都合で強制終了しない)
+    private let maxAwakeBackgroundTabs = 6
+    private func enforceAwakeBudget() {
+        let awake = tabs.filter { $0 !== selected && $0.webView != nil }.sorted { $0.lastActive < $1.lastActive }
+        let overflow = awake.count - maxAwakeBackgroundTabs
+        guard overflow > 0 else { return }
+        for tab in awake.prefix(overflow) { hibernate(tab, force: false) }
     }
 
     /// 再生中のメディアや入力途中のフォームがあるタブは眠らせない(force のときは眠らせる)
