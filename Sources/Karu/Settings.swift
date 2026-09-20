@@ -30,8 +30,18 @@ struct Settings: Codable {
     var userAgentSuffix = "Version/26.0 Safari/605.1.15"
     var adBlockEnabled = true
     /// ページ内容から「Chrome拡張が要りそうか」をAppleの端末内モデルで判定し、Chromiumへの切替を提案する。
-    /// macOS 26未満やApple Intelligence未有効の環境では判定自体が走らないので、この設定はONのままで害が無い
-    var aiEngineSuggestEnabled = true
+    ///
+    /// **実機検証(2026-09-20)で既定OFFにした。** 2つの重大な問題を確認:
+    /// ① 誤検知: 完全に無関係なexample.comのテキストに対し「Google Chrome拡張機能の導入を前提にしている」
+    ///    という**捏造した理由**まで付けてYES(要切替)と判定した。無関係な3ページ(Wikipedia風/ニュース風/
+    ///    レシピ風テキスト)でも試みたが、いずれもモデル自体が使用不能になり判定できず。
+    /// ② 可用性: `SystemLanguageModel.default.isAvailable` が起動直後はtrueだったが、
+    ///    数回の推論呼び出し後(数分以内)に `unavailable(appleIntelligenceNotEnabled)` へ変化し、
+    ///    Apple Intelligenceの設定自体は変えていないのに使えなくなった。原因未確認(推測: 端末内モデルの
+    ///    利用に何らかのクールダウン/上限がある)。
+    /// 機構自体(FoundationModels連携・ダイアログ・呼び出し配線)は動作するが、判定精度と可用性が
+    /// 実用水準に達していないため、コードは残しつつ既定を無効化する。有効化はSettings編集で可能
+    var aiEngineSuggestEnabled = false
 
     init() {}
     init(from decoder: Decoder) throws {

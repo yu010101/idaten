@@ -47,6 +47,14 @@
 - [ ] 実験: WKWebExtensionController
 - [x] `make_app.sh` — build/Karu.app 392K。`--install` は未実行(~/Applications へは置いていない)
 
+## AI提案機能の実機検証(09-20)— 既定OFFに変更
+- [x] 機構自体は実機で正しく発火することを確認(拡張前提を明記したテストページで正しくYES判定・ダイアログ表示)
+- [x] **しかし2つの重大な問題があり既定を無効化した**:
+      ①誤検知——完全に無関係なexample.comに対し「Chrome拡張前提」という捏造理由付きでYES判定。
+      ②可用性——起動直後は`isAvailable=true`だったが、数回の呼び出し後に`unavailable(appleIntelligenceNotEnabled)`へ
+      変化し使用不能に(設定は変えていない、原因未確認)。
+- [ ] 原因調査: モデル利用のクールダーム/上限の有無、プロンプトの改善(few-shot例の追加等)で誤検知率を下げられるか
+
 ## 注意(09-19)
 - ディスク空きが 16GB → 10GB に減った(私の成果物は約100MB。原因は別プロセスで未特定)。Phase 1 のエンジン導入(約1.5GB)はゲート8GBに近いので保留。
 - safety-guard が PID 直指定の kill を止める。テストで開いた Karu 管理下の Chrome(専用プロファイル、pid 7773, example.org)を**本人が手で閉じるか、killしてよいと承認するまで開いたまま**。既存の本チャンChrome(pid 32082)は無傷。
