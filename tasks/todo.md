@@ -63,7 +63,12 @@
   `disable_reasons` 無し(有効)。activeTab・tabs・scripting・sidePanel・debugger・nativeMessaging等、
   Claude in Chromeが必要とする権限が全て揃っている
 - **結論: 「拡張が全部動く」の核心部分(実際のCWS拡張がKaru管理下のChromiumエンジンで動く)を実証できた。**
-  1Password単体はまだ未検証だが、同じ仕組み(CWSインストール→Helium管理プロファイル)で動くはず
+- [x] **Stylus・1Passwordも追加検証、全て正常動作を確認(09-20続き)。**
+      Stylus: from_webstore=true, has_started_service_worker=true, disable_reasons=[]
+      1Password: 同上(1回目はCWS側の「Chromeに切り替えてください」バナーで失敗、再読み込みで成功。
+      同一拡張・同一環境でも再現しないことがある = CWSのブラウザ判定に多少の揺らぎがある模様)
+      これで対象4拡張(Claude in Chrome・OneTab・Stylus・1Password)全てが実機で動作確認済み。
+      「拡張が全部動く」の実証範囲を拡大できた
 
 ## AI提案機能の実機検証(09-20)— 既定OFFに変更
 - [x] 機構自体は実機で正しく発火することを確認(拡張前提を明記したテストページで正しくYES判定・ダイアログ表示)

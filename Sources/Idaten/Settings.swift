@@ -35,11 +35,13 @@ struct Settings: Codable {
     /// ① 誤検知: 完全に無関係なexample.comのテキストに対し「Google Chrome拡張機能の導入を前提にしている」
     ///    という**捏造した理由**まで付けてYES(要切替)と判定した。無関係な3ページ(Wikipedia風/ニュース風/
     ///    レシピ風テキスト)でも試みたが、いずれもモデル自体が使用不能になり判定できず。
-    /// ② 可用性: `SystemLanguageModel.default.isAvailable` が起動直後はtrueだったが、
-    ///    数回の推論呼び出し後(数分以内)に `unavailable(appleIntelligenceNotEnabled)` へ変化し、
-    ///    Apple Intelligenceの設定自体は変えていないのに使えなくなった。原因未確認(推測: 端末内モデルの
-    ///    利用に何らかのクールダウン/上限がある)。
-    /// 機構自体(FoundationModels連携・ダイアログ・呼び出し配線)は動作するが、判定精度と可用性が
+    /// ② 可用性: `SystemLanguageModel.default.isAvailable` が起動直後はtrueだったが、その後
+    ///    `unavailable(appleIntelligenceNotEnabled)` に変化した。**原因を特定**: `pmset -g batt` で
+    ///    低電力モード(Low Power Mode)が有効(`lowpowermode 1`)になっていた。Apple Intelligenceは
+    ///    低電力モード中は無効化される仕様(macOS公式の挙動)で、Idaten固有の不具合ではない。
+    ///    ただしこれは「バッテリー駆動でよく低電力モードを使う利用者には、この機能はほぼ使えない」
+    ///    ことを意味する ⑵ 誤検知の問題は低電力モードと無関係に確認済み。
+    /// 機構自体(FoundationModels連携・ダイアログ・呼び出し配線)は動作するが、①誤検知の精度が
     /// 実用水準に達していないため、コードは残しつつ既定を無効化する。有効化はSettings編集で可能
     var aiEngineSuggestEnabled = false
 
