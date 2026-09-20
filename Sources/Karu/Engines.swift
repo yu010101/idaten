@@ -65,11 +65,15 @@ final class ChromiumProcessEngine {
         }
     }
 
-    /// 入っている最初の候補と、その実行ファイル(Info.plist の CFBundleExecutable から引く。名前を決め打ちしない)
+    /// 入っている最初の候補と、その実行ファイル(Info.plist の CFBundleExecutable から引く。名前を決め打ちしない)。
+    /// appPath が /Applications/... でも、書き込み権限が無い環境では ~/Applications/... に入っていることがある
+    /// (Karu 自身の make_app.sh も同じフォールバックをする)ので両方見る
     func resolve() -> (Candidate, URL)? {
         for c in candidates {
-            if let exe = Bundle(path: c.appPath)?.executableURL, FileManager.default.isExecutableFile(atPath: exe.path) {
-                return (c, exe)
+            for path in [c.appPath, c.appPath.replacingOccurrences(of: "/Applications/", with: NSHomeDirectory() + "/Applications/")] {
+                if let exe = Bundle(path: path)?.executableURL, FileManager.default.isExecutableFile(atPath: exe.path) {
+                    return (c, exe)
+                }
             }
         }
         return nil

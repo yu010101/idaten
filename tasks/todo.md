@@ -11,12 +11,20 @@
 - [ ] `config/scenario.json`(20タブ固定シナリオ)
 - [ ] シナリオ実行器(起動→閲覧→放置→再訪、CPU時間・起動時間・swap差分も記録)
 
-## Phase 1 — Chromium系3候補の実測
-- [ ] ディスクゲート(空き8GB未満で停止)
-- [ ] ①Chrome+uBO Lite ②Helium ③Brave を専用 user-data-dir で計測(各3回)
-- [ ] 軽量化ポリシーが `chrome://policy` に出るか確認
-- [ ] 必須拡張の動作表(Claude in Chrome / OneTab / Stylus / 本人指定)— ログインが要る分は本人へ
-- [ ] 採否を記録
+## Phase 1 — Chromium系候補の実測 ※HeliumをPhase 2の既定エンジンに採用(09-19)
+- [x] ディスクゲート — 導入時に発動(9.5GB)。原因はKaru無関係の外部要因と判明(導入後30分弱で7.2GB→30GBまで自然回復)。本人の指示で運用は継続
+- [x] Helium導入(v0.17.2.1 arm64、347MB)。Developer ID署名+公証を`codesign`/`spctl`で確認、dmgサイズも公式値と一致(CRC32検証込み)
+- [~] Chrome(専用プロファイル)とHeliumを同一4タブ(example.org+ITmedia+Yahoo!ニュース+Wikipedia)で1回ずつ比較:
+      | | プロセス数 | 合計footprint |
+      |---|---|---|
+      | Chrome | 25 | 1,513.8 MB |
+      | Helium | 11 | 461.2 MB |
+      主因はレンダラープロセス数の差(Chrome約15 vs Helium約5)。広告/計測iframeをHeliumの内蔵遮断が読み込み前に止めていると見られる。
+      **n=1のため確定結論にしない。** ①Chrome+uBO Lite単体 ②Brave ③3回×20タブの本シナリオ は未実施(スキップを明記)
+- [x] Karu側: `ChromiumProcessEngine.resolve()` を修正、`/Applications` と `~/Applications` の両方を探すように(Heliumは後者に入った)
+- [ ] 軽量化ポリシーが `chrome://policy` に出るか — 未確認(研究で`defaults write`はrecommended止まりと判明済みなので優先度低)
+- [ ] 必須拡張の動作表(Claude in Chrome / OneTab / Stylus)— 本人の実機確認が必要(ログイン要)
+- [x] 採否記録: 段Aの既定候補はHelium(candidates順: Helium→Brave→Chrome、Engines.swiftの既定のまま)
 
 ## Phase 2 — Chromiumエンジン層
 - [ ] `TabEngine` プロトコル / `ChromiumProcessEngine`(段A)
