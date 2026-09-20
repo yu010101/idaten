@@ -10,9 +10,31 @@ struct Profile: Codable, Identifiable, Equatable {
     var colorHex: String       // ウィンドウ内のプロファイル表示に使う小さな色点
     var createdAt: Date
     var lastOpenedAt: Date
+    /// このプロファインの既定エンジン。暗号資産ウォレット(Phantom/Solflare等)のように「初めて訪れるサイトでも
+    /// 拡張の力が要る」プロファイルは既定Chromiumにする(Codexとの検討、2026-09-20)。既定はWebKit
+    var defaultEngine: EngineKind = .webkit
 
-    static func makeNew(name: String, colorHex: String) -> Profile {
-        Profile(id: UUID().uuidString, name: name, colorHex: colorHex, createdAt: Date(), lastOpenedAt: Date())
+    static func makeNew(name: String, colorHex: String, defaultEngine: EngineKind = .webkit) -> Profile {
+        Profile(id: UUID().uuidString, name: name, colorHex: colorHex, createdAt: Date(), lastOpenedAt: Date(), defaultEngine: defaultEngine)
+    }
+
+    init(id: String, name: String, colorHex: String, createdAt: Date, lastOpenedAt: Date, defaultEngine: EngineKind = .webkit) {
+        self.id = id; self.name = name; self.colorHex = colorHex
+        self.createdAt = createdAt; self.lastOpenedAt = lastOpenedAt; self.defaultEngine = defaultEngine
+    }
+
+    /// 実機で踏んだ事故(2026-09-20): defaultEngine追加後、素のCodable合成では旧バージョンの
+    /// profiles.json(このキーが無い)がデコードに失敗し、既存プロファイルが黙って迷子になった
+    /// (「既定」が新しいUUIDで作り直され、旧プロファイルのブックマーク・履歴が見えなくなった)。
+    /// 以後フィールドを足すときは、必ずこのように decodeIfPresent で受けること
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        colorHex = try c.decode(String.self, forKey: .colorHex)
+        createdAt = try c.decode(Date.self, forKey: .createdAt)
+        lastOpenedAt = try c.decode(Date.self, forKey: .lastOpenedAt)
+        defaultEngine = try c.decodeIfPresent(EngineKind.self, forKey: .defaultEngine) ?? .webkit
     }
 
     /// WKWebsiteDataStore の識別子は UUID 型を要求する。id は必ず UUID文字列で作るのでここは失敗しない
@@ -81,6 +103,7 @@ struct ProfilePaths {
         return d
     }
     var history: URL { dir.appendingPathComponent("history.sqlite") }
+    var bookmarks: URL { dir.appendingPathComponent("bookmarks.json") }
     var session: URL { dir.appendingPathComponent("session.json") }
     var engineRules: URL { dir.appendingPathComponent("engine_rules.json") }
     var chromiumProfile: URL { dir.appendingPathComponent("chromium-profile", isDirectory: true) }

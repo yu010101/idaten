@@ -6,7 +6,7 @@
 
 import AppKit
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var profiles: [Profile] = []
     private var windows: [String: BrowserWindowController] = [:]   // profile.id -> controller
     private var pendingURLs: [URL] = []
@@ -74,14 +74,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let alert = NSAlert()
         alert.messageText = "新しいプロファイル"
         alert.informativeText = "用途がわかる名前を付けてください(例: radineer.com、経理、転職活動)。Cookie・履歴・拡張ルールはこのプロファイル専用になります。"
+        let container = NSStackView()
+        container.orientation = .vertical
+        container.alignment = .leading
+        container.spacing = 6
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
-        alert.accessoryView = field
+        // Codexとの検討(2026-09-20): crypto wallet等「初めて訪れるサイトでも拡張の力が要る」プロファイルは
+        // ドメイン単位の例外では対応できない。プロファイル既定をChromiumにする選択肢をここで作れるようにする
+        let chromiumDefault = NSButton(checkboxWithTitle: "このプロファイルは既定でChromiumエンジンを使う(暗号資産ウォレット等、あらゆるサイトで拡張機能が要る場合)", target: nil, action: nil)
+        chromiumDefault.setContentHuggingPriority(.required, for: .horizontal)
+        container.addArrangedSubview(field)
+        container.addArrangedSubview(chromiumDefault)
+        field.widthAnchor.constraint(equalToConstant: 380).isActive = true
+        chromiumDefault.widthAnchor.constraint(lessThanOrEqualToConstant: 380).isActive = true
+        alert.accessoryView = container
         alert.addButton(withTitle: "作成")
         alert.addButton(withTitle: "キャンセル")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         let name = field.stringValue.trimmingCharacters(in: .whitespaces)
         guard !name.isEmpty else { return }
-        let profile = Profile.makeNew(name: name, colorHex: ProfileStore.nextColor(usedBy: profiles))
+        let profile = Profile.makeNew(name: name, colorHex: ProfileStore.nextColor(usedBy: profiles),
+                                      defaultEngine: chromiumDefault.state == .on ? .chromium : .webkit)
         profiles.append(profile)
         ProfileStore.save(profiles)
         rebuildProfileMenu()
@@ -161,6 +174,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
     private var profileMenu: NSMenu?
+    private var bookmarkMenu: NSMenu?
+
+    /// 開くたびに「今アクティブなプロファイル」のブックマークで作り直す(NSMenuDelegate、遅延構築)
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        guard menu === bookmarkMenu else { return }
+        menu.removeAllItems()
+        let addItem = NSMenuItem(title: "このページをブックマーク", action: #selector(BrowserWindowController.toggleBookmarkCurrentPage), keyEquivalent: "d")
+        menu.addItem(addItem)
+        menu.addItem(.separator())
+        guard let list = activeBrowser?.bookmarks.items, !list.isEmpty else {
+            let empty = NSMenuItem(title: "(ブックマークはまだありません)", action: nil, keyEquivalent: "")
+            empty.isEnabled = false
+            menu.addItem(empty)
+            return
+        }
+        for b in list.sorted(by: { $0.addedAt > $1.addedAt }) {
+            let i = NSMenuItem(title: b.title, action: #selector(openBookmark(_:)), keyEquivalent: "")
+            i.representedObject = b.url
+            i.target = self
+            i.toolTip = b.url
+            menu.addItem(i)
+        }
+    }
+
+    @objc private func openBookmark(_ sender: NSMenuItem) {
+        guard let urlString = sender.representedObject as? String, let url = URL(string: urlString) else { return }
+        activeBrowser?.open(url)
+    }
 
     private func rebuildProfileMenu() {
         guard let menu = profileMenu else { return }
@@ -238,6 +279,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ])
         profileMenu = add("プロファイル", [])
         rebuildProfileMenu()
+        bookmarkMenu = add("ブックマーク", [])
+        bookmarkMenu?.delegate = self   // menuNeedsUpdate で開くたびに作り直す(遅延構築)
         NSApp.mainMenu = main
     }
 

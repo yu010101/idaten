@@ -11,6 +11,7 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
     let rules: EngineRules
     let chromium: ChromiumProcessEngine
     let history: History
+    let bookmarks: BookmarkStore
     /// このプロファイル専用のCookie/localStorage/認証状態。他プロファイルとは完全に別の身元になる
     let dataStore: WKWebsiteDataStore
 
@@ -24,6 +25,7 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
     private let forwardButton = NSButton()
     private let reloadButton = NSButton()
     private let engineButton = NSButton()
+    private let bookmarkButton = NSButton()
     private let progress = NSProgressIndicator()
     private let container = NSView()
     private var hibernateTimer: Timer?
@@ -34,6 +36,7 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         self.rules = EngineRules(path: paths.engineRules)
         self.chromium = ChromiumProcessEngine(profileDir: paths.chromiumProfile)
         self.history = History(path: paths.history)
+        self.bookmarks = BookmarkStore(path: paths.bookmarks)
         self.dataStore = WKWebsiteDataStore(forIdentifier: profile.dataStoreIdentifier)
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 860),
                           styleMask: [.titled, .closable, .miniaturizable, .resizable],
@@ -92,6 +95,7 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
 
         let newTabButton = NSButton()
         style(newTabButton, "plus", "新しいタブ (⌘T)", #selector(newTabAction))
+        style(bookmarkButton, "star", "ブックマークに追加/削除 (⌘D)", #selector(toggleBookmarkCurrentPage))
 
         // 複数プロファイルのウィンドウを同時に開いたとき、どれがどのプロファインかを一目で(設計DBの"ビール3杯理論":
         // 文字を読まなくても色だけでわかるようにする)
@@ -103,7 +107,7 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         profileDot.widthAnchor.constraint(equalToConstant: 10).isActive = true
         profileDot.heightAnchor.constraint(equalToConstant: 10).isActive = true
 
-        let toolbar = NSStackView(views: [profileDot, backButton, forwardButton, reloadButton, urlField, engineButton, newTabButton])
+        let toolbar = NSStackView(views: [profileDot, backButton, forwardButton, reloadButton, urlField, bookmarkButton, engineButton, newTabButton])
         toolbar.orientation = .horizontal
         toolbar.spacing = 8
         toolbar.edgeInsets = NSEdgeInsets(top: 0, left: 10, bottom: 0, right: 10)
@@ -213,9 +217,12 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
             let s = selected?.url?.absoluteString ?? ""
             urlField.stringValue = s == "about:blank" ? "" : s
         }
-        let always = rules.engine(forHost: selected?.url?.host) == .chromium
+        let always = rules.engine(forHost: selected?.url?.host, profileDefault: profile.defaultEngine) == .chromium
         engineButton.title = always ? "Chromium固定" : "WebKit"
         window.title = selected.map { $0.title.isEmpty ? "Karu" : $0.title } ?? "Karu"
+        let isBookmarked = selected?.url.map { u in bookmarks.items.contains(where: { $0.url == u.absoluteString }) } ?? false
+        bookmarkButton.image = NSImage(systemSymbolName: isBookmarked ? "star.fill" : "star", accessibilityDescription: nil)
+        bookmarkButton.contentTintColor = isBookmarked ? .systemYellow : nil
     }
 
     // MARK: - タブ
@@ -441,7 +448,7 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
 
     @objc func switchEngine() {
         guard let tab = selected, let url = tab.url, let host = url.host else { return }
-        let already = rules.engine(forHost: host) == .chromium
+        let already = rules.engine(forHost: host, profileDefault: profile.defaultEngine) == .chromium
         let alert = NSAlert()
         alert.messageText = "このページを Chromium エンジンで開きます"
         alert.informativeText = "Chromium 側は別エンジンのため、Cookie・ログイン状態は共有されません(初回はログインし直しになります)。拡張機能は Chromium 側に入れたものが使えます。"
@@ -451,7 +458,7 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         check.state = already ? .on : .off
         alert.accessoryView = check
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-        rules.setChromium(host, check.state == .on)
+        rules.setOverride(host, check.state == .on ? .chromium : nil)
         if handOff(url) {
             tab.handedToChromium = true
             if tabs.count > 1 { hibernate(tab, force: true) }
@@ -472,7 +479,7 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         let check = NSButton(checkboxWithTitle: "\(host) は常に Chromium で開く", target: nil, action: nil)
         alert.accessoryView = check
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-        rules.setChromium(host, check.state == .on)
+        rules.setOverride(host, check.state == .on ? .chromium : nil)
         if handOff(tab.url!) {
             tab.handedToChromium = true
             if tabs.count > 1 { hibernate(tab, force: true) }
@@ -504,6 +511,22 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
 
     @objc func newTabAction() { newTab(url: URL(string: "about:blank")); focusURLField() }
     @objc func closeTabAction() { if let t = selected { close(t) } }
+
+    // MARK: - ブックマーク
+
+    @objc func toggleBookmarkCurrentPage() {
+        guard let url = selected?.url?.absoluteString, url != "about:blank" else { return }
+        if let existing = bookmarks.items.first(where: { $0.url == url }) {
+            bookmarks.remove(existing.id)
+        } else {
+            bookmarks.add(title: selected?.title.isEmpty == false ? selected!.title : url, url: url)
+        }
+        onBookmarksChanged?()
+        updateToolbar()
+    }
+
+    /// メニュー(main.swift)がブックマーク一覧を再構築する際のフック。追加/削除のたびに呼ぶ
+    var onBookmarksChanged: (() -> Void)?
     @objc func focusURLField() { window.makeFirstResponder(urlField); urlField.selectText(nil) }
     @objc func goBack() { selected?.webView?.goBack() }
     @objc func goForward() { selected?.webView?.goForward() }
@@ -522,7 +545,7 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
 
     @objc private func urlEntered() {
         guard let url = resolveInput(urlField.stringValue, searchURL: settings.searchURL) else { return }
-        if rules.engine(forHost: url.host) == .chromium { handOff(url); return }
+        if rules.engine(forHost: url.host, profileDefault: profile.defaultEngine) == .chromium { handOff(url); return }
         if selected == nil { newTab(url: url); return }
         selected?.url = url
         selected?.webView?.load(URLRequest(url: url))
@@ -530,7 +553,7 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
     }
 
     func open(_ url: URL) {
-        if rules.engine(forHost: url.host) == .chromium { handOff(url); return }
+        if rules.engine(forHost: url.host, profileDefault: profile.defaultEngine) == .chromium { handOff(url); return }
         newTab(url: url)
     }
 
@@ -691,7 +714,7 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
                  decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         if navigationAction.shouldPerformDownload { decisionHandler(.download); return }
         if navigationAction.targetFrame?.isMainFrame == true, let url = navigationAction.request.url,
-           rules.engine(forHost: url.host) == .chromium {
+           rules.engine(forHost: url.host, profileDefault: profile.defaultEngine) == .chromium {
             decisionHandler(.cancel)
             handOff(url)
             return
@@ -738,7 +761,7 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         guard settings.aiEngineSuggestEnabled, AIEngineAdvisor.isAvailable(),
               let url = webView.url, let host = url.host,
               url.scheme == "http" || url.scheme == "https",
-              rules.engine(forHost: host) != .chromium,
+              rules.engine(forHost: host, profileDefault: profile.defaultEngine) != .chromium,
               !aiCheckedHosts.contains(host) else { return }
         aiCheckedHosts.insert(host)
         webView.evaluateJavaScript("document.body ? document.body.innerText.slice(0, 600) : ''") { [weak self, weak webView] result, _ in

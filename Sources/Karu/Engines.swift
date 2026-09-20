@@ -5,32 +5,37 @@ enum EngineKind: String, Codable {
     case chromium    // 拡張が要る作業用
 }
 
-/// 「このドメインは常にChromium」。サブドメインも含めて後方一致で判定する。
-/// **プロファイルごと**に持つ(暗号資産ウォレット等、プロファイルによって前提が違うため)
+/// ドメインごとのエンジン指定。既定は「継承」(=プロファイルの既定値に従う)。
+/// Codexとの検討(2026-09-20)で決めた優先順位:
+///   タブの明示指定(⌘⇧E) > ドメイン例外(この辞書) > プロファイル既定値(Profile.defaultEngine) > アプリ既定(WebKit)
+/// 「常にChromiumを解除」は「WebKit固定」にはせず「継承」に戻す(暗号資産ウォレット用プロファイル等、
+/// プロファイル既定がChromiumのときにWebKit固定の例外が残ってしまう事故を避けるため)
 final class EngineRules {
-    private(set) var chromiumDomains: Set<String> = []
+    private(set) var domainOverrides: [String: EngineKind] = [:]
     private let path: URL
 
     init(path: URL) {
         self.path = path
         if let data = try? Data(contentsOf: path),
-           let obj = try? JSONDecoder().decode([String: [String]].self, from: data) {
-            chromiumDomains = Set(obj["chromium"] ?? [])
+           let obj = try? JSONDecoder().decode([String: String].self, from: data) {
+            domainOverrides = obj.compactMapValues { EngineKind(rawValue: $0) }
         }
     }
 
-    func engine(forHost host: String?) -> EngineKind {
-        guard let host = host?.lowercased() else { return .webkit }
-        for d in chromiumDomains where host == d || host.hasSuffix("." + d) { return .chromium }
-        return .webkit
+    /// `profileDefault` はこのプロファイルの既定エンジン(Profile.defaultEngine)。ドメイン例外が無ければこれを使う
+    func engine(forHost host: String?, profileDefault: EngineKind) -> EngineKind {
+        guard let host = host?.lowercased() else { return profileDefault }
+        for (d, kind) in domainOverrides where host == d || host.hasSuffix("." + d) { return kind }
+        return profileDefault
     }
 
-    func setChromium(_ host: String, _ on: Bool) {
+    /// kind が nil なら例外を消して「継承」に戻す
+    func setOverride(_ host: String, _ kind: EngineKind?) {
         let h = host.lowercased()
-        if on { chromiumDomains.insert(h) } else { chromiumDomains.remove(h) }
+        domainOverrides[h] = kind
         let enc = JSONEncoder()
         enc.outputFormatting = [.prettyPrinted, .sortedKeys]
-        if let data = try? enc.encode(["chromium": chromiumDomains.sorted()]) {
+        if let data = try? enc.encode(domainOverrides.mapValues { $0.rawValue }) {
             try? data.write(to: path, options: .atomic)
         }
     }
