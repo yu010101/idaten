@@ -32,7 +32,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
            let p = profiles.first(where: { $0.name == args[i + 1] }) {
             startProfile = p
         }
-        let browser = openWindow(for: startProfile)
+        // autoStart:false — このあと selftest 系フラグ/adBlockEnabled を設定してから明示的に start() する。
+        // (バグの実話 2026-09-20: ここを true のままにしていたら openWindow 内部で1回・直後にもう1回、
+        //  同じコントローラで start()→restoreSession() が2回走り、セッションが起動のたびに倍々に膨らんだ。
+        //  200件→60件[暴走ガードで打ち止め]→保存→2回目の復元で120件、という形で実機再現・特定した)
+        let browser = openWindow(for: startProfile, autoStart: false)
         if let i = args.firstIndex(of: "--selftest"), args.indices.contains(i + 1) {
             browser.selfTestDir = URL(fileURLWithPath: args[i + 1], isDirectory: true)
         }
@@ -48,7 +52,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// 指定プロファイルのウィンドウを、無ければ作って、あれば前面に出す
     @discardableResult
-    private func openWindow(for profile: Profile, urls: [URL] = []) -> BrowserWindowController {
+    private func openWindow(for profile: Profile, urls: [URL] = [], autoStart: Bool = true) -> BrowserWindowController {
         if let existing = windows[profile.id] {
             existing.window.makeKeyAndOrderFront(nil)
             urls.forEach(existing.open)
@@ -61,6 +65,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             profiles[i].lastOpenedAt = Date()
             ProfileStore.save(profiles)
         }
+        guard autoStart else { return controller }
         controller.start(openURLs: urls)
         return controller
     }
@@ -165,6 +170,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             item("ほかのタブを休眠させる", #selector(B.hibernateOthers), "z", [.command, .option]),
             .separator(),
             item("エンジンを切り替える(Chromiumで開く)", #selector(B.switchEngine), "e", [.command, .shift]),
+            .separator(),
+            item("[デバッグ] 状態をダンプ", #selector(B.debugDumpState), "d", [.command, .option]),
         ])
         profileMenu = add("プロファイル", [])
         rebuildProfileMenu()

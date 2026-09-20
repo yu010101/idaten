@@ -85,7 +85,16 @@
 - [ ] YouTube動画自体の重さはコーデック/動画依存で不安定(1本目Karu有利、2本目Chrome有利)。エンジン側の
       対策は保留。Codexの助言通り「大量タブの制御」に絞るのが正しい判断
 - [ ] Google Meet/Teamsの実機負荷は未測定(実会議に入れないため)。WASM依存という根拠は無い(Codex確認済み)
-- [ ] hibernate()の非同期取りこぼし(+1個)の原因調査
+- [x] hibernate()の非同期取りこぼし(+1個)を修正: force経路はJS応答を待たず即座に破棄。
+      通常経路は「判定中フラグ」で二重発行を防ぎ、3秒でタイムアウトして次回に回す
+- [x] **重大バグを発見・修正: `restoreSession()`が起動のたびに2回呼ばれ、セッションが倍々に膨張していた。**
+      原因: マルチプロファイル対応の際、`main.swift`の`openWindow()`が内部で`controller.start()`を呼び、
+      直後に`applicationDidFinishLaunching`がもう一度`browser.start()`を呼んでいた(見落とし)。
+      実機再現: 200件→1回目で60件[暴走ガード]→保存→2回目の復元で120件、という倍増パターンをファイルログで確定。
+      修正: `openWindow(autoStart: Bool)`を追加し、起動時はautoStart:falseにして明示的に1回だけstart()する。
+      合わせて`restoreSession()`に**暴走ガード(直近60件のみ復元)**を恒久的に追加、超過時はNSLogで警告。
+      さらに`newTab(skipUIRebuild:)`で復元ループ中の`rebuildTabBar()`/`saveSession()`をO(N²)からO(N)に修正
+      (どちらか片方だけでも実際に本体が数GBまで膨張してクラッシュする事故だった。原因は動画・エンジンとは無関係)
 
 ## Phase 4 — 比較と報告
 - [ ] 現行Chrome / Karu(WebKit)/ Karu(混在)の比較表

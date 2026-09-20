@@ -260,9 +260,14 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         return wv
     }
 
+    /// 実機で踏んだ事故(2026-09-20): セッション復元でタブがN件あるとき、1件ごとに rebuildTabBar()(現在の
+    /// タブ数に比例)と saveSession()(同じく比例)を呼んでいたため、復元全体がO(N²)になっていた。
+    /// テスト中にセッションへ180件溜まり、メインスレッドが数秒〜張り付いてAppleEventにも応答しなくなった
+    /// (Karu本体が数GBまで膨張して見えたのはこの間に多数のNSButton/SwiftUIビューグラフが作られたため)。
+    /// `skipUIRebuild` は restoreSession() 専用: 全件追加し終えてから1回だけ rebuildTabBar()/saveSession() する
     @discardableResult
     func newTab(url: URL?, select: Bool = true, hibernated: Bool = false, title: String? = nil,
-                configuration: WKWebViewConfiguration? = nil) -> Tab {
+                configuration: WKWebViewConfiguration? = nil, skipUIRebuild: Bool = false) -> Tab {
         let tab = Tab()
         tab.url = url
         if let title { tab.title = title }
@@ -276,6 +281,7 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
             // configuration つき = window.open 由来。読み込みは WebKit 自身が行うので load しない
             if configuration == nil, let url, url.absoluteString != "about:blank" { wv.load(URLRequest(url: url)) }
         }
+        guard !skipUIRebuild else { return tab }
         if select { self.select(tab) } else { rebuildTabBar() }
         saveSession()
         return tab
@@ -371,8 +377,23 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
     }
 
     /// 再生中のメディアや入力途中のフォームがあるタブは眠らせない(force のときは眠らせる)
+    /// 実機で踏んだ事故(2026-09-20、Codexとの調査): 大量タブを一気に開き、判定(evaluateJavaScript)の
+    /// 返事が来ないタブ(読み込み中など)に対して、メモリ逼迫のたびに何度も判定要求を重ねて発行し続けた結果、
+    /// 未完了の要求(と、それぞれが強参照する WKWebView)が積み上がり、Karu本体が4.9GBまで膨張してクラッシュした。
+    /// 対策は2つ: ①force(強制休眠)はJSの返事を待たず即座に破棄する ②通常経路は「既に判定中のタブへは
+    /// 重ねて要求しない」+「一定時間で返事が無ければ諦めて休眠を進める」
     func hibernate(_ tab: Tab, force: Bool) {
         guard let wv = tab.webView, tab !== selected || force else { return }
+        if force {
+            tab.interactionState = wv.interactionState
+            tab.savedScrollY = 0
+            tab.hibernationCheckInFlight = false
+            tab.dropWebView()
+            rebuildTabBar()
+            return
+        }
+        guard !tab.hibernationCheckInFlight else { return }
+        tab.hibernationCheckInFlight = true
         let js = """
         (function(){
           var playing = Array.prototype.some.call(document.querySelectorAll('video,audio'), function(m){ return !m.paused && !m.ended; });
@@ -381,17 +402,39 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
           return { playing: playing, editing: editing, y: window.scrollY };
         })()
         """
-        wv.evaluateJavaScript(js) { [weak self, weak tab] result, _ in
+        var finished = false
+        let finish: (Bool, Bool, Double) -> Void = { [weak self, weak tab] playing, editing, y in
+            guard !finished else { return }   // タイムアウトとJS完了の両方が発火した場合、先着だけを使う
+            finished = true
             guard let self, let tab, tab.webView === wv else { return }
-            let info = result as? [String: Any] ?? [:]
-            let busy = (info["playing"] as? Bool ?? false) || (info["editing"] as? Bool ?? false)
-            if busy && !force { tab.lastActive = Date(); return }
+            tab.hibernationCheckInFlight = false
+            if playing || editing { tab.lastActive = Date(); return }
             tab.interactionState = wv.interactionState
-            // interactionState が取れなかったときだけ、URL再読込+スクロール位置で代用する
-            tab.savedScrollY = tab.interactionState == nil ? (info["y"] as? Double ?? 0) : 0
+            tab.savedScrollY = tab.interactionState == nil ? y : 0
             tab.dropWebView()
             self.rebuildTabBar()
         }
+        wv.evaluateJavaScript(js) { result, _ in
+            let info = result as? [String: Any] ?? [:]
+            finish(info["playing"] as? Bool ?? false, info["editing"] as? Bool ?? false, info["y"] as? Double ?? 0)
+        }
+        // 3秒返事が無ければ「読み込み中で判定できない」とみなし、busy扱いで一旦諦める(強制はしない)。
+        // 次の巡回で再挑戦できるよう lastActive は更新せず、in-flight フラグだけ下ろす
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak tab] in
+            guard !finished else { return }
+            finished = true
+            tab?.hibernationCheckInFlight = false
+        }
+    }
+
+    /// デバッグ専用: 「Swift側の帳簿(webView!=nilの数)」と「OS側のWebContentプロセス数」が一致しているかを
+    /// 実機で突き合わせるためのダンプ(Codexとの調査、2026-09-20)。⌘⌥D。要らなくなったら消す
+    @objc func debugDumpState() {
+        let awake = tabs.filter { $0.webView != nil }
+        let lines = ["awakeWebViews=\(awake.count) selected=\(selected.map { ObjectIdentifier($0) }?.debugDescription ?? "nil")"]
+            + awake.map { "  tab=\(ObjectIdentifier($0)) url=\($0.url?.absoluteString ?? "nil") selected=\($0 === selected)" }
+        let text = lines.joined(separator: "\n") + "\n"
+        try? text.write(to: Paths.support.appendingPathComponent("debug_dump.txt"), atomically: true, encoding: .utf8)
     }
 
     // MARK: - エンジン切替(段A)
@@ -576,6 +619,8 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         wv.evaluateJavaScript(js) { [self] result, error in
             var report = result as? [String: Any] ?? ["error": String(describing: error)]
             report["tabs"] = tabs.count
+            // Codexとの検討: 「起きているWKWebViewの数」と「OS上のWebContentプロセス数」は別物かもしれない仮説を検証する
+            report["awakeWebViews"] = tabs.filter { $0.webView != nil }.count
             report["ruleLists"] = ruleLists.count
             report["adBlockEnabled"] = settings.adBlockEnabled
             // HttpOnly(JS から見えない)ログイン用Cookieも含めて、実際にディスクへ持続しているストアの中身を数える。
@@ -615,11 +660,20 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         if selfTestDir != nil { return }
         guard let data = try? Data(contentsOf: paths.session),
               let s = try? JSONDecoder().decode(Session.self, from: data), !s.tabs.isEmpty else { return }
-        for t in s.tabs {
-            guard let u = URL(string: t.url) else { continue }
-            newTab(url: u, select: false, hibernated: true, title: t.title)
+        // 暴走ガード: 万一セッションが壊れて/事故で肥大化していても、数百タブをそのまま復元して固まらないようにする。
+        // 超えた分は静かに捨てず、本人が気づけるようログへ残す
+        let cap = 60
+        let toRestore = s.tabs.count > cap ? Array(s.tabs.suffix(cap)) : s.tabs
+        if s.tabs.count > cap {
+            NSLog("Karu: セッションに%d件あり、直近%d件だけ復元しました(残りは破棄)", s.tabs.count, cap)
         }
+        for t in toRestore {
+            guard let u = URL(string: t.url) else { continue }
+            newTab(url: u, select: false, hibernated: true, title: t.title, skipUIRebuild: true)
+        }
+        rebuildTabBar()
         if !tabs.isEmpty { select(tabs[min(max(0, s.selected), tabs.count - 1)]) }
+        saveSession()
     }
 
     /// プロファイルウィンドウが1つ閉じても、他のプロファイルのウィンドウが残っていればアプリは終了しない。
