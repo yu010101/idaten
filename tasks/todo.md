@@ -47,6 +47,24 @@
 - [ ] 実験: WKWebExtensionController
 - [x] `make_app.sh` — build/Karu.app 392K。`--install` は未実行(~/Applications へは置いていない)
 
+## Chromium系エンジンでの拡張機能の実動作確認(09-20)— 完了
+- [x] **確認できた最大の未検証項目が解消した。** Idaten管理下のHeliumプロファイルで、Chrome Web Storeから
+      実際に拡張をインストールし、Secure Preferencesで動作を直接確認した。
+- 経緯: 当初OneTabのCWSインストールが「Download interrupted」で失敗。原因はHelium公式の既知仕様
+  (拡張ダウンロードは「Helium Services」という自社プロキシのセットアップ完了が前提、
+  imputnet/helium#343参照)。本人が`chrome://settings/privacy/services`で同意・セットアップを完了したところ、
+  Googleアカウント同期と手動インストールの両方で計12個の拡張が入った:
+  uBlock Origin(同梱)・JSONVue・**OneTab**・Microsoft Clarity Live・**Claude(Claude in Chrome)**・
+  GoFullPage・Chrome Remote Desktop・Save Image As PNG・RSS Subscription Extension・Evernote Web Clipper・
+  extstore-fixups・Chromium PDF Viewer
+- Claude拡張(`fcoeoabgfenejglbffodgkkbkcdhcgfn`)をSecure Preferencesで直接検証:
+  `from_webstore: true` / `has_started_service_worker: true`(実際にコードが起動した証拠) /
+  `granted_permissions` = `active_permissions`(全権限付与済み、withholding無し) /
+  `disable_reasons` 無し(有効)。activeTab・tabs・scripting・sidePanel・debugger・nativeMessaging等、
+  Claude in Chromeが必要とする権限が全て揃っている
+- **結論: 「拡張が全部動く」の核心部分(実際のCWS拡張がKaru管理下のChromiumエンジンで動く)を実証できた。**
+  1Password単体はまだ未検証だが、同じ仕組み(CWSインストール→Helium管理プロファイル)で動くはず
+
 ## AI提案機能の実機検証(09-20)— 既定OFFに変更
 - [x] 機構自体は実機で正しく発火することを確認(拡張前提を明記したテストページで正しくYES判定・ダイアログ表示)
 - [x] **しかし2つの重大な問題があり既定を無効化した**:
