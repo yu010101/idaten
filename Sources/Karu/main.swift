@@ -93,6 +93,64 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         openWindow(for: p)
     }
 
+    /// Chromeから「すんなり移管」する。実測(2026-09-20)通り、拡張が無くログイン分離だけが目的のプロファイルも
+    /// 多いので、Chromeの各プロファイルを1つずつ、対応するKaruの新規プロファイルへブックマーク+履歴ごと持ってくる。
+    /// パスワードは対象外(Keychain暗号化に依存し安全に横取りできない)。拡張は一覧だけ出す(自動では入れられない)
+    @objc private func importFromChrome() {
+        let chromeProfiles = ChromeImport.availableProfiles()
+        guard !chromeProfiles.isEmpty else {
+            let a = NSAlert(); a.messageText = "Chromeのプロファイルが見つかりませんでした"; a.runModal(); return
+        }
+        let picker = NSAlert()
+        picker.messageText = "どのChromeプロファイルから移行しますか"
+        picker.informativeText = "選んだプロファイルと同じ名前のKaruプロファイルを新規作成し、ブックマーク・履歴を取り込みます。\nパスワードは対象外です(Keychainの暗号化に依存するため安全に取り込めません)。"
+        let popup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 320, height: 26))
+        // NSPopUpButton.addItems(withTitles:) は同名タイトルを黙って除外し、以降の項目のインデックスが
+        // ずれる(実機で踏んだ事故 2026-09-20: 名前が空欄で表示名が同じ"radineer.com"のプロファイルが2つあり、
+        // 1件に統合されて後続が1つずつズレた結果、選んだのと違うプロファイルが取り込まれた——
+        // 「カズキ」を選んだのに「wiseman.holdings」が処理された。修正・実機で再検証し正しく動作を確認)。
+        // タイトル文字列でなく representedObject(dirName)で紐付け、取り出しもそこから行う
+        for p in chromeProfiles {
+            let title = p.email.isEmpty ? p.displayName : "\(p.displayName)(\(p.email))"
+            let mi = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            mi.representedObject = p.dirName
+            popup.menu?.addItem(mi)
+        }
+        picker.accessoryView = popup
+        picker.addButton(withTitle: "取り込む")
+        picker.addButton(withTitle: "キャンセル")
+        guard picker.runModal() == .alertFirstButtonReturn else { return }
+        guard let selectedDir = popup.selectedItem?.representedObject as? String,
+              let source = chromeProfiles.first(where: { $0.dirName == selectedDir }) else { return }
+
+        // 同名プロファイルが既にあれば増やさず、そこへ追加取り込みする
+        let target: Profile
+        if let existing = profiles.first(where: { $0.name == source.displayName }) {
+            target = existing
+        } else {
+            target = Profile.makeNew(name: source.displayName, colorHex: ProfileStore.nextColor(usedBy: profiles))
+            profiles.append(target)
+            ProfileStore.save(profiles)
+            rebuildProfileMenu()
+        }
+        let paths = ProfilePaths(profile: target)
+        let bookmarks = BookmarkStore(path: paths.dir.appendingPathComponent("bookmarks.json"))
+        let bmItems = ChromeImport.readBookmarks(profileDir: source.dirName)
+        let addedBookmarks = bookmarks.importFromChrome(bmItems)
+        let addedHistory = ChromeImport.importHistory(profileDir: source.dirName, into: paths.history)
+        let extensions = ChromeImport.extensionNames(profileDir: source.dirName)
+
+        let result = NSAlert()
+        result.messageText = "「\(source.displayName)」から取り込みました"
+        var msg = "ブックマーク \(addedBookmarks)件・履歴 \(addedHistory)件を取り込みました。"
+        if !extensions.isEmpty {
+            msg += "\n\nこのプロファイルには次の拡張機能が入っていました。使う場合はChromiumエンジン側(⌘⇧E)に入れ直してください:\n" + extensions.joined(separator: "、")
+        }
+        result.informativeText = msg
+        result.runModal()
+        openWindow(for: target)
+    }
+
     /// 他アプリからリンクを渡されたとき(既定ブラウザにした場合)。最後に触っていたプロファイルで開く
     func application(_ application: NSApplication, open urls: [URL]) {
         guard let browser = activeBrowser else { pendingURLs += urls; return }
@@ -143,9 +201,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             item("Karu を隠す", #selector(NSApplication.hide(_:)), "h"),
             item("Karu を終了", #selector(NSApplication.terminate(_:)), "q"),
         ])
+        let importItem = item("Chromeから移行…", #selector(importFromChrome), "")
+        importItem.keyEquivalentModifierMask = []
+        importItem.target = self   // AppDelegate自身のメソッドなので明示しないと呼ばれない(応答チェーン任せにしない)
         _ = add("ファイル", [
             item("新しいタブ", #selector(B.newTabAction), "t"),
             item("場所を開く…", #selector(B.focusURLField), "l"),
+            .separator(),
+            importItem,
             .separator(),
             item("タブを閉じる", #selector(B.closeTabAction), "w"),
         ])
