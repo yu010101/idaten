@@ -59,6 +59,12 @@
 - 需要の傍証: cmuxに「WebKit⇔Chromiumのタブ切替が欲しい」という要望issueが立っている(#2803、Open)。同種のOSSは見つからなかった=Karuの立ち位置に競合なし。
 - 詳細と全URL(発見40件+反証40件、[OK]/[NG]/[??]付き): `docs/prior-art-research-2026-09-19.txt`
 
+## Karu.app を ~/Applications へ導入(09-19/20)
+- [x] `make_app.sh --install` 実行。416KB。起動確認(クリーン状態、1タブ79.1MB: WebContent/GPU/Networking込み5プロセス)
+- [x] テスト時のセッション・エンジンルール・Chromiumプロファイル・履歴(example.com等4件)を消去し、本人の初回起動をきれいにした
+- 分かったこと(調査中に遭遇): 復元セッションの「選択中でない休眠タブ」はWKWebViewを作らないため、chromium対象ドメインでもナビゲーションが起きずChromiumへは渡らない(意図通り、コードを再現テストで確認)。
+  「選択中タブ」はload()するので、対象ドメインならdecidePolicyForが正しく検知してhandOffする。手動での混同(複数のテスト起動が残っていた)で一時的に誤作動に見えたが、クリーンな再現では発生せず
+
 ## Phase 4 — 比較と報告
 - [ ] 現行Chrome / Karu(WebKit)/ Karu(混在)の比較表
 - [ ] crosscheck.sh でCodexに反証させる
