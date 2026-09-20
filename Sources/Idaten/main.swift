@@ -1,8 +1,8 @@
-// Karu — 軽い・広告カット・タブごとにエンジンを切り替えるブラウザ。
+// Idaten — 軽い・広告カット・タブごとにエンジンを切り替えるブラウザ。
 // 既定は WKWebView(OSのWebKitを使うので本体は小さい)。拡張が要る作業だけ Chromium 系エンジンへ渡す(⌘⇧E)。
 //
 // プロファイル: 実測(2026-09-20)で、本人のChrome15プロファイル中12個は拡張ゼロ・アカウント分離だけが目的だった。
-// Karuも「1プロファイル=1つのCookie/ログイン身元=1ウィンドウ」を複数持てるようにしている(Chromeの多重ログインと同じ形)。
+// Idatenも「1プロファイル=1つのCookie/ログイン身元=1ウィンドウ」を複数持てるようにしている(Chromeの多重ログインと同じ形)。
 
 import AppKit
 
@@ -107,7 +107,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     /// Chromeから「すんなり移管」する。実測(2026-09-20)通り、拡張が無くログイン分離だけが目的のプロファイルも
-    /// 多いので、Chromeの各プロファイルを1つずつ、対応するKaruの新規プロファイルへブックマーク+履歴ごと持ってくる。
+    /// 多いので、Chromeの各プロファイルを1つずつ、対応するIdatenの新規プロファイルへブックマーク+履歴ごと持ってくる。
     /// パスワードは対象外(Keychain暗号化に依存し安全に横取りできない)。拡張は一覧だけ出す(自動では入れられない)
     @objc private func importFromChrome() {
         let chromeProfiles = ChromeImport.availableProfiles()
@@ -116,7 +116,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         let picker = NSAlert()
         picker.messageText = "どのChromeプロファイルから移行しますか"
-        picker.informativeText = "選んだプロファイルと同じ名前のKaruプロファイルを新規作成し、ブックマーク・履歴を取り込みます。\nパスワードは対象外です(Keychainの暗号化に依存するため安全に取り込めません)。"
+        picker.informativeText = "選んだプロファイルと同じ名前のIdatenプロファイルを新規作成し、ブックマーク・履歴を取り込みます。\nパスワードは対象外です(Keychainの暗号化に依存するため安全に取り込めません)。"
         let popup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 320, height: 26))
         // NSPopUpButton.addItems(withTitles:) は同名タイトルを黙って除外し、以降の項目のインデックスが
         // ずれる(実機で踏んだ事故 2026-09-20: 名前が空欄で表示名が同じ"radineer.com"のプロファイルが2つあり、
@@ -236,11 +236,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return i
         }
         typealias B = BrowserWindowController
-        _ = add("Karu", [
-            item("Karu について", #selector(NSApplication.orderFrontStandardAboutPanel(_:)), "", []),
+        _ = add("Idaten", [
+            item("Idaten について", #selector(NSApplication.orderFrontStandardAboutPanel(_:)), "", []),
             .separator(),
-            item("Karu を隠す", #selector(NSApplication.hide(_:)), "h"),
-            item("Karu を終了", #selector(NSApplication.terminate(_:)), "q"),
+            item("Idaten を隠す", #selector(NSApplication.hide(_:)), "h"),
+            item("Idaten を終了", #selector(NSApplication.terminate(_:)), "q"),
         ])
         let importItem = item("Chromeから移行…", #selector(importFromChrome), "")
         importItem.keyEquivalentModifierMask = []

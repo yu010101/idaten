@@ -42,9 +42,9 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
                           styleMask: [.titled, .closable, .miniaturizable, .resizable],
                           backing: .buffered, defer: false)
         super.init()
-        window.title = "Karu — \(profile.name)"
+        window.title = "Idaten — \(profile.name)"
         window.delegate = self
-        window.setFrameAutosaveName("KaruWindow-\(profile.id)")
+        window.setFrameAutosaveName("IdatenWindow-\(profile.id)")
         window.isReleasedWhenClosed = false
         window.backgroundColor = Theme.windowBackground   // 動的NSColorなのでライト/ダーク切替に自動追従する
         buildUI()
@@ -168,7 +168,7 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         guard settings.adBlockEnabled else { begin(); return }
         AdBlock.load { [self] lists, errors in
             ruleLists = lists
-            for e in errors { NSLog("Karu adblock: %@", e) }
+            for e in errors { NSLog("Idaten adblock: %@", e) }
             begin()
         }
     }
@@ -219,7 +219,7 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         }
         let always = rules.engine(forHost: selected?.url?.host, profileDefault: profile.defaultEngine) == .chromium
         engineButton.title = always ? "Chromium固定" : "WebKit"
-        window.title = selected.map { $0.title.isEmpty ? "Karu" : $0.title } ?? "Karu"
+        window.title = selected.map { $0.title.isEmpty ? "Idaten" : $0.title } ?? "Idaten"
         let isBookmarked = selected?.url.map { u in bookmarks.items.contains(where: { $0.url == u.absoluteString }) } ?? false
         bookmarkButton.image = NSImage(systemSymbolName: isBookmarked ? "star.fill" : "star", accessibilityDescription: nil)
         bookmarkButton.contentTintColor = isBookmarked ? .systemYellow : nil
@@ -270,7 +270,7 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
     /// 実機で踏んだ事故(2026-09-20): セッション復元でタブがN件あるとき、1件ごとに rebuildTabBar()(現在の
     /// タブ数に比例)と saveSession()(同じく比例)を呼んでいたため、復元全体がO(N²)になっていた。
     /// テスト中にセッションへ180件溜まり、メインスレッドが数秒〜張り付いてAppleEventにも応答しなくなった
-    /// (Karu本体が数GBまで膨張して見えたのはこの間に多数のNSButton/SwiftUIビューグラフが作られたため)。
+    /// (Idaten本体が数GBまで膨張して見えたのはこの間に多数のNSButton/SwiftUIビューグラフが作られたため)。
     /// `skipUIRebuild` は restoreSession() 専用: 全件追加し終えてから1回だけ rebuildTabBar()/saveSession() する
     @discardableResult
     func newTab(url: URL?, select: Bool = true, hibernated: Bool = false, title: String? = nil,
@@ -386,7 +386,7 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
     /// 再生中のメディアや入力途中のフォームがあるタブは眠らせない(force のときは眠らせる)
     /// 実機で踏んだ事故(2026-09-20、Codexとの調査): 大量タブを一気に開き、判定(evaluateJavaScript)の
     /// 返事が来ないタブ(読み込み中など)に対して、メモリ逼迫のたびに何度も判定要求を重ねて発行し続けた結果、
-    /// 未完了の要求(と、それぞれが強参照する WKWebView)が積み上がり、Karu本体が4.9GBまで膨張してクラッシュした。
+    /// 未完了の要求(と、それぞれが強参照する WKWebView)が積み上がり、Idaten本体が4.9GBまで膨張してクラッシュした。
     /// 対策は2つ: ①force(強制休眠)はJSの返事を待たず即座に破棄する ②通常経路は「既に判定中のタブへは
     /// 重ねて要求しない」+「一定時間で返事が無ければ諦めて休眠を進める」
     func hibernate(_ tab: Tab, force: Bool) {
@@ -688,7 +688,7 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         let cap = 60
         let toRestore = s.tabs.count > cap ? Array(s.tabs.suffix(cap)) : s.tabs
         if s.tabs.count > cap {
-            NSLog("Karu: セッションに%d件あり、直近%d件だけ復元しました(残りは破棄)", s.tabs.count, cap)
+            NSLog("Idaten: セッションに%d件あり、直近%d件だけ復元しました(残りは破棄)", s.tabs.count, cap)
         }
         for t in toRestore {
             guard let u = URL(string: t.url) else { continue }

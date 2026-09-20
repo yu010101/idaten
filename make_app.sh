@@ -1,6 +1,6 @@
 #!/bin/zsh
-# Karu.app を作る。SwiftPM の実行ファイルを .app に包み、ad-hoc 署名する(型は ~/aiboard/make_app.sh と同じ)。
-# 既定では build/Karu.app まで。--install を付けたときだけ ~/Applications へ置く。
+# Idaten.app を作る。SwiftPM の実行ファイルを .app に包み、ad-hoc 署名する(型は ~/aiboard/make_app.sh と同じ)。
+# 既定では build/Idaten.app まで。--install を付けたときだけ ~/Applications へ置く。
 set -eu
 cd "$(dirname "$0")"
 mkdir -p build
@@ -10,17 +10,24 @@ if ! swift build -c release > build/build.log 2>&1; then
   grep -E "error:" build/build.log >&2 || true
   exit 1
 fi
-APP=build/Karu.app
+APP=build/Idaten.app
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp .build/release/Karu "$APP/Contents/MacOS/Karu"
+cp .build/release/Idaten "$APP/Contents/MacOS/Idaten"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 [ -f Resources/AppIcon.icns ] && cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+# 同梱フィルタ(adblock-rustでビルド時に変換済みのJSON)。原文(*.source.txt)は帰属表記の裏付け用でアプリには積まない
+if [ -d rules ]; then
+  mkdir -p "$APP/Contents/Resources/rules"
+  for f in rules/*.json rules/NOTICE.md; do
+    [ -f "$f" ] && cp "$f" "$APP/Contents/Resources/rules/"
+  done
+fi
 codesign --force --sign - "$APP" > build/codesign.log 2>&1
 echo "built: $APP ($(du -sh "$APP" | cut -f1))"
 if [ "${1:-}" = "--install" ]; then
   mkdir -p "$HOME/Applications"
-  DEST="$HOME/Applications/Karu.app"
+  DEST="$HOME/Applications/Idaten.app"
   [ -d "$DEST" ] && rm -rf "$DEST"
   cp -R "$APP" "$DEST"
   echo "installed: $DEST"

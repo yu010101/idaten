@@ -43,12 +43,12 @@ final class EngineRules {
 
 /// 段A: 管理下のChromium系ブラウザを専用プロファイルで起動し、URLを渡す。
 /// エンジン本体は同梱しない(GPLバイナリを再配布しない)。入っているものを上から順に探す。
-/// 既存の Chrome プロファイルには触れない — 必ず Karu 専用の --user-data-dir を使う。
+/// 既存の Chrome プロファイルには触れない — 必ず Idaten 専用の --user-data-dir を使う。
 ///
-/// **KaruのプロファイルごとにChromium側の --user-data-dir も別**にする。実測(2026-09-20)で判明した通り、
+/// **IdatenのプロファイルごとにChromium側の --user-data-dir も別**にする。実測(2026-09-20)で判明した通り、
 /// 本人のChrome複数プロファイルの過半数は「拡張ゼロ・アカウント分離が目的」で、
 /// crypto walletなど一部拡張(Phantom/Solflare)はプロファイル固有の前提を持つため、
-/// Karu側の身元(個人用/仕事用等)とChromium側の身元を1対1に対応させないと、
+/// Idaten側の身元(個人用/仕事用等)とChromium側の身元を1対1に対応させないと、
 /// 渡した先でログインし直しが要る問題が余計に増える。
 final class ChromiumProcessEngine {
     struct Candidate: Codable { var name: String; var appPath: String }
@@ -83,7 +83,7 @@ final class ChromiumProcessEngine {
 
     /// 入っている最初の候補と、その実行ファイル(Info.plist の CFBundleExecutable から引く。名前を決め打ちしない)。
     /// appPath が /Applications/... でも、書き込み権限が無い環境では ~/Applications/... に入っていることがある
-    /// (Karu 自身の make_app.sh も同じフォールバックをする)ので両方見る
+    /// (Idaten 自身の make_app.sh も同じフォールバックをする)ので両方見る
     func resolve() -> (Candidate, URL)? {
         for c in candidates {
             for path in [c.appPath, c.appPath.replacingOccurrences(of: "/Applications/", with: NSHomeDirectory() + "/Applications/")] {

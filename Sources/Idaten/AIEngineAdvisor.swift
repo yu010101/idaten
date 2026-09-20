@@ -6,7 +6,7 @@ import FoundationModels
 /// ページの内容から「Chrome拡張が要りそうか」を判定し、Chromiumエンジンへの切替を提案する。
 ///
 /// 使うのはAppleの端末内モデル(Foundation Models framework)。macOS自体がSpotlight/Writing Tools等で
-/// 既に読み込んでいる共有モデルを借りるだけなので、Karu専用にモデルを積む必要が無く、
+/// 既に読み込んでいる共有モデルを借りるだけなので、Idaten専用にモデルを積む必要が無く、
 /// 常駐メモリはほぼ増えない(自前でモデルファイルを同梱する方式とはここが決定的に違う)。
 ///
 /// macOS 26未満・Apple Intelligence未有効・対象外ハードでは `isAvailable()` が false を返し、

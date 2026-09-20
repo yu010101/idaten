@@ -1,7 +1,7 @@
 import Foundation
 import WebKit
 
-/// Karuの「プロファイル」= 実測した本人のChrome利用(15プロファイル中12個は拡張ゼロで、
+/// Idatenの「プロファイル」= 実測した本人のChrome利用(15プロファイル中12個は拡張ゼロで、
 /// 目的は複数アカウント/事業体のログイン分離だった)を再現するための単位。
 /// Cookie・localStorage・履歴・セッション・Chromium側の身元を、プロファイルごとに完全に分ける。
 struct Profile: Codable, Identifiable, Equatable {

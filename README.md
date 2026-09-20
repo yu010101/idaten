@@ -1,4 +1,7 @@
-# Karu
+# Idaten(韋駄天)
+
+名前は仏教由来の俊足の神「韋駄天」から。「拡張が要らない大半のサイトは韋駄天のごとく軽く速く、
+要る時だけ本気を出す」という設計を表しています。
 
 macOS用の軽量ブラウザ。既定タブは WebKit(Safari と同じエンジン)で動くので起動時から軽く、広告も内蔵の
 `WKContentRuleList` で遮断します。Chrome拡張機能が要るサイトだけ、そのタブを実物の Chromium 系ブラウザ
@@ -14,7 +17,7 @@ macOS用の軽量ブラウザ。既定タブは WebKit(Safari と同じエンジ
 - Chromium系(Brave/Helium等)は広告遮断も拡張対応もできるが、素性がChromiumである以上、軽さの下限は
   Chromium基準から逃れられない。
 
-Karuは「1つのエンジンで全部」を諦め、**タブ単位でエンジンを使い分けます**。普段のブラウジングは
+Idatenは「1つのエンジンで全部」を諦め、**タブ単位でエンジンを使い分けます**。普段のブラウジングは
 WebKitの軽さのまま、拡張が要る1〜2サイトだけ実物のChromiumへ切り替えます。
 
 ## 実測(2026-09-20時点)
@@ -24,7 +27,7 @@ WebKitの軽さのまま、拡張が要る1〜2サイトだけ実物のChromium�
 | | プロセス数 | 合計メモリ(圧縮込み) |
 |---|---|---|
 | Chrome | 25 | 1,513.8 MB |
-| Helium(Karuが渡す先) | 11 | 461.2 MB |
+| Helium(Idatenが渡す先) | 11 | 461.2 MB |
 
 差の主因は広告・計測用の第三者iframeが1つずつ独立レンダラープロセスになること(Chromiumのsite isolation)。
 広告遮断はメモリ消費だけでなく、そもそものプロセス数を減らします。
@@ -49,7 +52,7 @@ WebKitの軽さのまま、拡張が要る1〜2サイトだけ実物のChromium�
 
 ```sh
 swift build -c release
-./make_app.sh --install   # ~/Applications/Karu.app へ導入
+./make_app.sh --install   # ~/Applications/Idaten.app へ導入
 ```
 
 Xcodeプロジェクト不要(SwiftPM単体)。Swift 5.9 / macOS 14+。AIエンジン提案機能のみ macOS 26+ が必要
@@ -57,9 +60,9 @@ Xcodeプロジェクト不要(SwiftPM単体)。Swift 5.9 / macOS 14+。AIエン�
 
 ## Chromium系エンジンについて
 
-Karu自体はGPLコードを含みません。Chromium系エンジン(Helium/Brave/Chrome)は**同梱せず、利用者が別途
+Idaten自体はGPLコードを含みません。Chromium系エンジン(Helium/Brave/Chrome)は**同梱せず、利用者が別途
 インストールした実行ファイルを検出して起動するだけ**です。優先順位や起動フラグは
-`~/Library/Application Support/Karu/engine.json` / `chromium_flags.txt` で変更できます。
+`~/Library/Application Support/Idaten/engine.json` / `chromium_flags.txt` で変更できます。
 
 ## 状態
 

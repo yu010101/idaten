@@ -7,7 +7,7 @@ import Foundation
 enum Paths {
     static let support: URL = {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let dir = base.appendingPathComponent("Karu", isDirectory: true)
+        let dir = base.appendingPathComponent("Idaten", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }()

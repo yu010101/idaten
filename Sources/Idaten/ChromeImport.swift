@@ -3,7 +3,7 @@ import SQLite3
 
 /// Chromeから「すんなり移管」するための一式。読むだけで、Chrome側のファイルは一切変更しない。
 /// パスワードは対象外(macOS Keychainの暗号化に依存し、安全に横取りする手段が無い。
-/// Karu側で必要ならOS標準のパスワード管理・Keychainをそのまま使う運用にする)。
+/// Idaten側で必要ならOS標準のパスワード管理・Keychainをそのまま使う運用にする)。
 enum ChromeImport {
     struct ChromeProfile { var dirName: String; var displayName: String; var email: String }
 

@@ -2,12 +2,12 @@
 import PackageDescription
 
 let package = Package(
-    name: "Karu",
+    name: "Idaten",
     platforms: [.macOS(.v14)],
     targets: [
         .executableTarget(
-            name: "Karu",
-            path: "Sources/Karu",
+            name: "Idaten",
+            path: "Sources/Idaten",
             linkerSettings: [.linkedLibrary("sqlite3")]
         ),
     ]

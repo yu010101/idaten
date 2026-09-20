@@ -16,7 +16,7 @@ final class Tab: NSObject {
     var observations: [NSKeyValueObservation] = []
     /// 休眠判定(evaluateJavaScript)が既に飛んでいるかどうか。無いと、メモリ逼迫のたびに同じタブへ
     /// 判定を重ねて発行してしまい、判定が返ってこないタブ(読み込み中など)で要求が積み上がっていく。
-    /// 実機でKaru本体が4.9GBまで膨張してクラッシュした事故の原因と推測(2026-09-20)
+    /// 実機でIdaten本体が4.9GBまで膨張してクラッシュした事故の原因と推測(2026-09-20)
     var hibernationCheckInFlight = false
 
     var isHibernated: Bool { webView == nil && url != nil }

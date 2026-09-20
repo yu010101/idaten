@@ -12,7 +12,7 @@ extension NSColor {
     }
 }
 
-/// Karuの配色。設計DB(hub.db knowledge_base, category=design)の原則2つを適用:
+/// Idatenの配色。設計DB(hub.db knowledge_base, category=design)の原則2つを適用:
 ///   1. primitive → semantic の2階層(id 16401/16388)。個々のUI部品は semantic 名だけを参照し、
 ///      実際の色(primitive)を後から差し替えても部品側は直さなくて済む
 ///   2. light/dark は「新しいhexを足す」のではなく semantic の参照先を差し替えるだけにする(id 16391)

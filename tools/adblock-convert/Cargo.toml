@@ -1,0 +1,8 @@
+[package]
+name = "adblock-convert"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+adblock = { version = "0.13", features = ["content-blocking"] }
+serde_json = "1"
