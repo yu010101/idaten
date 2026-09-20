@@ -1,9 +1,13 @@
 # Idaten(韋駄天)
 
-<img src="docs/images/idaten-hero.png" alt="韋駄天のイメージ画像" width="220" align="right">
+<img src="docs/images/idaten-statue.jpg" alt="韋駄天像(明代・1527年・Linden-Museum Stuttgart蔵)" width="200" align="right">
 
 名前は仏教由来の俊足の神「韋駄天」から。「拡張が要らない大半のサイトは韋駄天のごとく軽く速く、
 要る時だけ本気を出す」という設計を表しています。
+
+<sub>写真: 韋駄天像(中国・河南省、明代1527年、陶製)。Linden-Museum Stuttgart蔵。
+撮影 [Daderot](https://commons.wikimedia.org/wiki/User:Daderot)、[CC0(パブリックドメイン)](https://creativecommons.org/publicdomain/zero/1.0/deed.ja)、
+[Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Weituo_(Veda),_China,_Henan_province,_Ming_dynasty,_dated_1527_AD,_stoneware_-_Linden-Museum_-_Stuttgart,_Germany_-_DSC03608.jpg)より。</sub>
 
 macOS用の軽量ブラウザ。既定タブは WebKit(Safari と同じエンジン)で動くので起動時から軽く、広告も内蔵の
 `WKContentRuleList` で遮断します。Chrome拡張機能が要るサイトだけ、そのタブを実物の Chromium 系ブラウザ
