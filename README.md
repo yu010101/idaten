@@ -1,5 +1,7 @@
 # Idaten(韋駄天)
 
+<img src="docs/images/idaten-hero.png" alt="韋駄天のイメージ画像" width="220" align="right">
+
 名前は仏教由来の俊足の神「韋駄天」から。「拡張が要らない大半のサイトは韋駄天のごとく軽く速く、
 要る時だけ本気を出す」という設計を表しています。
 
