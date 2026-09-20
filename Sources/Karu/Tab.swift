@@ -17,11 +17,11 @@ final class Tab: NSObject {
 
     var isHibernated: Bool { webView == nil && url != nil }
 
+    /// エンジンは色ドット(BrowserWindowController.rebuildTabBar)で示すのでここには含めない。
+    /// 休眠だけは文字で残す("z" は他の絵文字よりフォント依存が少なく、幅が安定する)
     var displayTitle: String {
         let base = title.isEmpty ? (url?.host ?? "新しいタブ") : title
-        if handedToChromium { return "→C " + base }
-        if isHibernated { return "z " + base }
-        return base
+        return isHibernated ? "z " + base : base
     }
 
     func dropWebView() {

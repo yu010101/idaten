@@ -43,6 +43,7 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         window.delegate = self
         window.setFrameAutosaveName("KaruWindow-\(profile.id)")
         window.isReleasedWhenClosed = false
+        window.backgroundColor = Theme.windowBackground   // 動的NSColorなのでライト/ダーク切替に自動追従する
         buildUI()
     }
 
@@ -92,7 +93,17 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         let newTabButton = NSButton()
         style(newTabButton, "plus", "新しいタブ (⌘T)", #selector(newTabAction))
 
-        let toolbar = NSStackView(views: [backButton, forwardButton, reloadButton, urlField, engineButton, newTabButton])
+        // 複数プロファイルのウィンドウを同時に開いたとき、どれがどのプロファインかを一目で(設計DBの"ビール3杯理論":
+        // 文字を読まなくても色だけでわかるようにする)
+        let profileDot = NSView(frame: NSRect(x: 0, y: 0, width: 10, height: 10))
+        profileDot.wantsLayer = true
+        profileDot.layer?.backgroundColor = NSColor(hex: profile.colorHex).cgColor
+        profileDot.layer?.cornerRadius = 5
+        profileDot.toolTip = "プロファイル: \(profile.name)"
+        profileDot.widthAnchor.constraint(equalToConstant: 10).isActive = true
+        profileDot.heightAnchor.constraint(equalToConstant: 10).isActive = true
+
+        let toolbar = NSStackView(views: [profileDot, backButton, forwardButton, reloadButton, urlField, engineButton, newTabButton])
         toolbar.orientation = .horizontal
         toolbar.spacing = 8
         toolbar.edgeInsets = NSEdgeInsets(top: 0, left: 10, bottom: 0, right: 10)
@@ -161,6 +172,15 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
     private func rebuildTabBar() {
         tabStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         for (i, tab) in tabs.enumerated() {
+            // エンジンの種別は文字でなく色ドットで示す(見た目の負荷が低く、離れて見てもわかる)
+            let dot = NSView(frame: NSRect(x: 0, y: 0, width: 6, height: 6))
+            dot.wantsLayer = true
+            dot.layer?.cornerRadius = 3
+            dot.layer?.backgroundColor = (tab.handedToChromium ? Theme.EngineDot.chromium : Theme.EngineDot.webkit).cgColor
+            dot.toolTip = tab.handedToChromium ? "Chromiumエンジンで表示中" : "WebKitエンジンで表示中"
+            dot.widthAnchor.constraint(equalToConstant: 6).isActive = true
+            dot.heightAnchor.constraint(equalToConstant: 6).isActive = true
+
             let title = NSButton(title: tab.displayTitle, target: self, action: #selector(tabClicked(_:)))
             title.tag = i
             title.isBordered = false
@@ -174,7 +194,7 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
             close.isBordered = false
             close.imageScaling = .scaleProportionallyDown
             close.widthAnchor.constraint(equalToConstant: 14).isActive = true
-            let cell = NSStackView(views: [title, close])
+            let cell = NSStackView(views: [dot, title, close])
             cell.orientation = .horizontal
             cell.spacing = 4
             cell.edgeInsets = NSEdgeInsets(top: 3, left: 8, bottom: 3, right: 6)
