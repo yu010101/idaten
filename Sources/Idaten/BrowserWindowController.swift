@@ -562,6 +562,9 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         }
         let wv = IdatenWebView(frame: .zero, configuration: conf)
         wv.owner = self
+        // 開発者ツール: WKWebView は Safari の Web インスペクタから検査できる(macOS 13.3+)。
+        // 設定で有効にしたときだけ。Safari の「開発」メニュー →(この Mac)→ Idaten のページ を選ぶと開く
+        if #available(macOS 13.3, *) { wv.isInspectable = settings.webInspectorEnabled }
         wv.navigationDelegate = self
         wv.uiDelegate = self   // 無いと confirm()/alert() が黙って「いいえ」を返す
         wv.allowsBackForwardNavigationGestures = true

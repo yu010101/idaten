@@ -1,0 +1,48 @@
+{
+ "next_1": {
+  "type": "choice",
+  "choice": "cookie",
+  "probabilities": {
+   "measure": 0.24,
+   "daily": 0.28,
+   "cookie": 0.41,
+   "fork": 0.07
+  }
+ },
+ "next_2": {
+  "type": "choice",
+  "choice": "cookie",
+  "probabilities": {
+   "measure": 0.34,
+   "daily": 0.24,
+   "cookie": 0.39,
+   "fork": 0.03
+  }
+ },
+ "next_3": {
+  "type": "choice",
+  "choice": "cookie",
+  "probabilities": {
+   "measure": 0.3,
+   "daily": 0.25,
+   "cookie": 0.42,
+   "fork": 0.03
+  }
+ },
+ "ctrl_ab": {
+  "type": "choice",
+  "choice": "a",
+  "probabilities": {
+   "a": 1,
+   "b": 0
+  }
+ },
+ "ctrl_ba": {
+  "type": "choice",
+  "choice": "a",
+  "probabilities": {
+   "a": 1,
+   "b": 0
+  }
+ }
+}

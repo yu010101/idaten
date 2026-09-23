@@ -14,6 +14,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     private let adBlock = NSButton(checkboxWithTitle: "広告を遮断する", target: nil, action: nil)
     private let aiSuggest = NSButton(checkboxWithTitle: "拡張が要りそうなページで Chromium を提案する(端末内のAI判定)", target: nil, action: nil)
     private let dockWindow = NSButton(checkboxWithTitle: "Chromium のタブを Idaten の窓に重ねて表示する(試験中)", target: nil, action: nil)
+    private let inspector = NSButton(checkboxWithTitle: "Safari の Web インスペクタで検査できるようにする(開発者向け)", target: nil, action: nil)
 
     override init() {
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 430),
@@ -68,7 +69,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             label("検索に使うURL"), searchField, hint("%@ が入力語に置き換わります"),
             label("ホームページ"), homeField,
             label("使っていないタブを休眠させるまで"), hibernateRow,
-            label("その他"), adBlock, aiSuggest, dockWindow,
+            label("その他"), adBlock, aiSuggest, dockWindow, inspector,
             hint("重ねて表示は試験中です。窓の追従が遅れる・他アプリの上に残るなどの粗さがあります"),
             buttons,
         ])
@@ -101,6 +102,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         adBlock.state = settings.adBlockEnabled ? .on : .off
         aiSuggest.state = settings.aiEngineSuggestEnabled ? .on : .off
         dockWindow.state = settings.dockChromiumWindow ? .on : .off
+        inspector.state = settings.webInspectorEnabled ? .on : .off
     }
 
     @objc private func saveAndClose() {
@@ -114,6 +116,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         s.adBlockEnabled = adBlock.state == .on
         s.aiEngineSuggestEnabled = aiSuggest.state == .on
         s.dockChromiumWindow = dockWindow.state == .on
+        s.webInspectorEnabled = inspector.state == .on
         s.save()
         settings = s
         onSaved?(s)

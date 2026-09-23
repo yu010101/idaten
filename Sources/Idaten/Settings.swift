@@ -41,6 +41,9 @@ struct Settings: Codable {
     /// 重ね窓(dockChromiumWindow)とは別物: 窓は重ねず、タブの一覧・URLバー・⌘1〜⌘9・履歴の記録だけを共有する。
     /// これが false だと Chromium 側の閲覧は Idaten から完全に見えない(履歴も補完も育たない)
     var mirrorChromiumTabs = true
+    /// Safari の Web インスペクタからページを検査できるようにする(開発者ツールの代わり)。
+    /// 有効にすると、他のアプリからこのブラウザのページの中身を見られる口ができるので既定は false
+    var webInspectorEnabled = false
     /// ツールバーの下にブックマークバーを出す(⇧⌘B で切り替え)
     var bookmarkBarVisible = false
     /// ページ内容から「Chrome拡張が要りそうか」をAppleの端末内モデルで判定し、Chromiumへの切替を提案する。
@@ -74,6 +77,7 @@ struct Settings: Codable {
         dockChromiumWindow = try c.decodeIfPresent(Bool.self, forKey: .dockChromiumWindow) ?? d.dockChromiumWindow
         bookmarkBarVisible = try c.decodeIfPresent(Bool.self, forKey: .bookmarkBarVisible) ?? d.bookmarkBarVisible
         mirrorChromiumTabs = try c.decodeIfPresent(Bool.self, forKey: .mirrorChromiumTabs) ?? d.mirrorChromiumTabs
+        webInspectorEnabled = try c.decodeIfPresent(Bool.self, forKey: .webInspectorEnabled) ?? d.webInspectorEnabled
     }
 
     static func load() -> Settings {
