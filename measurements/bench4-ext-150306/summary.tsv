@@ -1,1 +1,3 @@
 name	point	median_mib	peak_mib	procs_median	samples
+chromeext-1	60s	2907.2	3320.4	64	30
+chromeext-1	300s	2701.4	3320.4	58	29
