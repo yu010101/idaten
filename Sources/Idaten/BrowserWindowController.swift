@@ -143,7 +143,9 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         style(forwardButton, "chevron.right", "進む (⌘])", #selector(goForward))
         style(reloadButton, "arrow.clockwise", "再読み込み (⌘R)", #selector(reload))
         engineButton.title = "WebKit"
-        engineButton.bezelStyle = .rounded
+        engineButton.bezelStyle = .inline   // 主張しすぎない見た目にする(押せることは分かる程度)
+        engineButton.font = .systemFont(ofSize: 11)
+        engineButton.contentTintColor = .secondaryLabelColor
         engineButton.toolTip = "エンジンを切り替える (⌘⇧E) — Chromium側とはCookie・ログインを共有しません"
         engineButton.target = self
         engineButton.action = #selector(switchEngine)
@@ -242,13 +244,25 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         tabStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         for (i, tab) in tabs.enumerated() {
             // エンジンの種別は文字でなく色ドットで示す(見た目の負荷が低く、離れて見てもわかる)
-            let dot = NSView(frame: NSRect(x: 0, y: 0, width: 6, height: 6))
-            dot.wantsLayer = true
-            dot.layer?.cornerRadius = 3
-            dot.layer?.backgroundColor = (tab.isChromium ? Theme.EngineDot.chromium : Theme.EngineDot.webkit).cgColor
-            dot.toolTip = tab.isChromium ? "Chromiumエンジンで表示中" : "WebKitエンジンで表示中"
-            dot.widthAnchor.constraint(equalToConstant: 6).isActive = true
-            dot.heightAnchor.constraint(equalToConstant: 6).isActive = true
+            // ファビコンがあれば出す。無い/Chromium へ渡したタブは、エンジンの色ドットのまま
+            let mark: NSView
+            let chromiumTab = tab.isChromium || tab.handedOffExternally
+            if let icon = tab.favicon, !chromiumTab {
+                let iv = NSImageView(image: icon)
+                iv.imageScaling = .scaleProportionallyDown
+                iv.widthAnchor.constraint(equalToConstant: 14).isActive = true
+                iv.heightAnchor.constraint(equalToConstant: 14).isActive = true
+                mark = iv
+            } else {
+                let dot = NSView(frame: NSRect(x: 0, y: 0, width: 6, height: 6))
+                dot.wantsLayer = true
+                dot.layer?.cornerRadius = 3
+                dot.layer?.backgroundColor = (chromiumTab ? Theme.EngineDot.chromium : Theme.EngineDot.webkit).cgColor
+                dot.widthAnchor.constraint(equalToConstant: 6).isActive = true
+                dot.heightAnchor.constraint(equalToConstant: 6).isActive = true
+                mark = dot
+            }
+            mark.toolTip = chromiumTab ? "Chromiumエンジンで表示中" : "WebKitエンジンで表示中"
 
             let title = NSButton(title: tab.displayTitle, target: self, action: #selector(tabClicked(_:)))
             title.tag = i
@@ -263,7 +277,7 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
             close.isBordered = false
             close.imageScaling = .scaleProportionallyDown
             close.widthAnchor.constraint(equalToConstant: 14).isActive = true
-            let cell = NSStackView(views: [dot, title, close])
+            let cell = NSStackView(views: [mark, title, close])
             cell.orientation = .horizontal
             cell.spacing = 4
             cell.edgeInsets = NSEdgeInsets(top: 3, left: 8, bottom: 3, right: 6)
@@ -274,6 +288,17 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         }
     }
 
+    /// 「%E9%9F%8B…」のままだと読めないので、表示は復号して https:// と末尾の / を落とす。
+    /// 編集を始めたときは本物の文字列に戻す(コピーや手直しができるように)
+    static func prettyURL(_ url: URL) -> String {
+        let s = url.absoluteString
+        if s == "about:blank" { return "" }
+        var t = s.removingPercentEncoding ?? s
+        if t.hasPrefix("https://") { t.removeFirst(8) }
+        if t.hasSuffix("/"), (url.path == "/" || url.path.isEmpty), url.query == nil { t.removeLast() }
+        return t
+    }
+
     private func updateToolbar() {
         let wv = selected?.webView
         // Chromium タブの戻れる/進めるは CDP から取らない(毎回問い合わせる割に得るものが少ない)。常に押せるようにしておく
@@ -281,8 +306,7 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         backButton.isEnabled = chromiumTab || (wv?.canGoBack ?? false)
         forwardButton.isEnabled = chromiumTab || (wv?.canGoForward ?? false)
         if window.firstResponder !== urlField.currentEditor() {
-            let s = selected?.url?.absoluteString ?? ""
-            urlField.stringValue = s == "about:blank" ? "" : s
+            urlField.stringValue = selected?.url.map(Self.prettyURL) ?? ""
         }
         let always = rules.engine(forHost: selected?.url?.host, profileDefault: profile.defaultEngine) == .chromium
         engineButton.title = selected?.isChromium == true ? (always ? "Chromium固定" : "Chromium") : "WebKit"
@@ -569,6 +593,16 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
     @discardableResult
     private func handOff(_ url: URL, in tab: Tab? = nil, activate: Bool = true) -> Bool {
         if let tab, tab.forceWebKit { return false }
+        // 既定は従来どおり「別窓で開く」。重ね窓は設定で選んだときだけ(Settings.dockChromiumWindow を参照)
+        guard settings.dockChromiumWindow else {
+            switch chromium.open(url) {
+            case .success:
+                tab?.handedOffExternally = true
+                rebuildTabBar()
+                return true
+            case .failure(let err): showEngineError(err); return false
+            }
+        }
         switch dock.ensureStarted() {
         case .success:
             let t = tab ?? newTab(url: url, select: false, hibernated: true)
@@ -582,19 +616,23 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
             saveSession()
             return true
         case .failure(let err):
-            let alert = NSAlert()
-            alert.alertStyle = .warning
-            switch err {
-            case .notInstalled(let names):
-                alert.messageText = "Chromium系エンジンが見つかりません"
-                alert.informativeText = "次のいずれかを入れてください: \(names.joined(separator: " / "))\n候補は \(Paths.engineConfig.path) で変えられます。"
-            case .launchFailed(let why):
-                alert.messageText = "Chromium系エンジンを起動できませんでした"
-                alert.informativeText = why
-            }
-            alert.runModal()
+            showEngineError(err)
             return false
         }
+    }
+
+    private func showEngineError(_ err: ChromiumProcessEngine.EngineError) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        switch err {
+        case .notInstalled(let names):
+            alert.messageText = "Chromium系エンジンが見つかりません"
+            alert.informativeText = "次のいずれかを入れてください: \(names.joined(separator: " / "))\n候補は \(Paths.engineConfig.path) で変えられます。"
+        case .launchFailed(let why):
+            alert.messageText = "Chromium系エンジンを起動できませんでした"
+            alert.informativeText = why
+        }
+        alert.runModal()
     }
 
     // MARK: - Chromium タブ(ChromiumDock)
@@ -823,6 +861,145 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
     /// メニュー(main.swift)がブックマーク一覧を再構築する際のフック。追加/削除のたびに呼ぶ
     var onBookmarksChanged: (() -> Void)?
     @objc func focusURLField() { window.makeFirstResponder(urlField); urlField.selectText(nil) }
+
+    /// 編集を始めたら、表示用に整えた文字列でなく本物のURLを入れる(コピー・手直しのため)
+    func controlTextDidBeginEditing(_ obj: Notification) {
+        guard let field = obj.object as? NSTextField, field === urlField,
+              let url = selected?.url, url.absoluteString != "about:blank" else { return }
+        let full = url.absoluteString
+        if field.stringValue != full {
+            field.stringValue = full
+            field.currentEditor()?.selectAll(nil)
+        }
+    }
+
+    // MARK: - ページ内検索(⌘F)
+
+    private var findBar: NSView?
+    private let findField = NSTextField()
+    private let findCount = NSTextField(labelWithString: "")
+
+    @objc func performFind() {
+        guard selected?.webView != nil else { return }
+        if findBar == nil { buildFindBar() }
+        findBar?.isHidden = false
+        window.makeFirstResponder(findField)
+        findField.selectText(nil)
+    }
+
+    @objc func findNext() { runFind(forward: true) }
+    @objc func findPrevious() { runFind(forward: false) }
+    @objc func closeFindBar() {
+        findBar?.isHidden = true
+        selected?.webView.map { window.makeFirstResponder($0) }
+    }
+
+    private func runFind(forward: Bool) {
+        guard let wv = selected?.webView, !findField.stringValue.isEmpty else { return }
+        let conf = WKFindConfiguration()
+        conf.backwards = !forward
+        conf.caseSensitive = false
+        conf.wraps = true
+        wv.find(findField.stringValue, configuration: conf) { [weak self] result in
+            self?.findCount.stringValue = result.matchFound ? "" : "見つかりません"
+        }
+    }
+
+    private func buildFindBar() {
+        findField.placeholderString = "ページ内を検索"
+        findField.delegate = self
+        findField.target = self
+        findField.action = #selector(findNext)
+        findField.bezelStyle = .roundedBezel
+        findField.widthAnchor.constraint(equalToConstant: 220).isActive = true
+        findCount.textColor = .secondaryLabelColor
+        findCount.font = .systemFont(ofSize: 11)
+        func button(_ symbol: String, _ tip: String, _ sel: Selector) -> NSButton {
+            let b = NSButton(image: NSImage(systemSymbolName: symbol, accessibilityDescription: tip)!, target: self, action: sel)
+            b.isBordered = false
+            b.toolTip = tip
+            return b
+        }
+        let bar = NSStackView(views: [findField, findCount,
+                                      button("chevron.up", "前へ (⇧⌘G)", #selector(findPrevious)),
+                                      button("chevron.down", "次へ (⌘G)", #selector(findNext)),
+                                      button("xmark", "閉じる (esc)", #selector(closeFindBar))])
+        bar.orientation = .horizontal
+        bar.spacing = 6
+        bar.edgeInsets = NSEdgeInsets(top: 4, left: 10, bottom: 4, right: 10)
+        // ページの上に浮かべる板。角丸と縁と影を付けて、ページの一部に見えないようにする(Safari の検索バーと同じ形)
+        let panel = NSVisualEffectView()
+        panel.material = .popover
+        panel.blendingMode = .withinWindow
+        panel.state = .active
+        panel.wantsLayer = true
+        panel.layer?.cornerRadius = 8
+        panel.layer?.borderWidth = 1
+        panel.layer?.borderColor = NSColor.separatorColor.cgColor
+        panel.shadow = NSShadow()
+        panel.layer?.shadowOpacity = 0.18
+        panel.layer?.shadowRadius = 6
+        panel.layer?.shadowOffset = CGSize(width: 0, height: -2)
+        panel.translatesAutoresizingMaskIntoConstraints = false
+        bar.translatesAutoresizingMaskIntoConstraints = false
+        panel.addSubview(bar)
+        root.addSubview(panel)
+        NSLayoutConstraint.activate([
+            bar.topAnchor.constraint(equalTo: panel.topAnchor),
+            bar.bottomAnchor.constraint(equalTo: panel.bottomAnchor),
+            bar.leadingAnchor.constraint(equalTo: panel.leadingAnchor),
+            bar.trailingAnchor.constraint(equalTo: panel.trailingAnchor),
+            panel.topAnchor.constraint(equalTo: container.topAnchor, constant: 8),
+            panel.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
+        ])
+        findBar = panel
+    }
+
+    // MARK: - URLバーの候補(履歴・ブックマーク)
+
+    /// 入力のたびに候補を出す。日本語入力の変換中(marked text)は邪魔になるので出さない
+    func controlTextDidChange(_ obj: Notification) {
+        guard let field = obj.object as? NSTextField, field === urlField,
+              let editor = field.currentEditor() as? NSTextView,
+              !editor.hasMarkedText(), field.stringValue.count >= 2 else { return }
+        editor.complete(nil)
+    }
+
+    /// 履歴(訪問回数の多い順)とブックマークから候補を作る。記録はしていたのに出口が無かった部分
+    func control(_ control: NSControl, textView: NSTextView, completions words: [String],
+                 forPartialWordRange charRange: NSRange, indexOfSelectedItem index: UnsafeMutablePointer<Int>) -> [String] {
+        guard control === urlField else { return words }
+        let text = textView.string
+        guard text.count >= 2 else { return [] }
+        let fromHistory = history.suggest(text, limit: 6).map(\.url)
+        let lower = text.lowercased()
+        let fromBookmarks = bookmarks.items
+            .filter { $0.url.lowercased().contains(lower) || $0.title.lowercased().contains(lower) }
+            .prefix(3).map(\.url)
+        var seen = Set<String>()
+        return (fromHistory + fromBookmarks).filter { seen.insert($0).inserted }
+    }
+
+    /// 検索欄で esc を押したら閉じる
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        guard control === findField, selector == #selector(NSResponder.cancelOperation(_:)) else { return false }
+        closeFindBar()
+        return true
+    }
+
+    // MARK: - 拡大縮小・停止・番号でタブ切替
+
+    @objc func zoomIn() { selected?.webView.map { $0.pageZoom = min($0.pageZoom * 1.1, 5) } }
+    @objc func zoomOut() { selected?.webView.map { $0.pageZoom = max($0.pageZoom / 1.1, 0.25) } }
+    @objc func zoomReset() { selected?.webView?.pageZoom = 1 }
+    @objc func stopLoading() { selected?.webView?.stopLoading(); progress.isHidden = true }
+
+    /// ⌘1〜⌘8 はその番号のタブ、⌘9 は最後のタブ(ブラウザの慣習に合わせる)
+    @objc func selectTabByNumber(_ sender: NSMenuItem) {
+        guard !tabs.isEmpty else { return }
+        let n = sender.tag
+        select(n == 9 ? tabs[tabs.count - 1] : (tabs.indices.contains(n - 1) ? tabs[n - 1] : tabs[tabs.count - 1]))
+    }
     @objc func goBack() {
         if let id = selected?.chromiumTargetId { dock.history(id, -1) } else { selected?.webView?.goBack() }
     }
@@ -1042,6 +1219,12 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
 
     private func runSelfTest(_ wv: WKWebView, dir: URL) {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        // 検索バーの見た目も自己検査で撮れるようにしておく(画面収録の権限が無くても確認できる)
+        if ProcessInfo.processInfo.environment["IDATEN_SELFTEST_FIND"] == "1" {
+            performFind()
+            findField.stringValue = "韋駄天"
+            runFind(forward: true)
+        }
         func png(_ image: NSImage) -> Data? {
             guard let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff) else { return nil }
             return rep.representation(using: .png, properties: [:])
@@ -1171,6 +1354,7 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
             tab.savedScrollY = 0
         }
         if tab === selected { progress.isHidden = true }
+        fetchFavicon(for: tab, webView)
         saveSession()
         if let dir = selfTestDir, selfTestHibernate {
             advanceHibernateTest(tab, webView, dir: dir)
@@ -1180,6 +1364,31 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
             DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in self?.runSelfTest(webView, dir: dir) }
         } else if selfTestDir == nil {
             checkIfNeedsChromium(webView, tab: tab)
+        }
+    }
+
+    /// ファビコンはホスト単位で1回だけ取り、以後は使い回す。
+    /// 取得は WKWebView のデータストア越しではなく素の URLSession(Cookie を送らない)
+    private static var faviconCache: [String: NSImage] = [:]
+    private func fetchFavicon(for tab: Tab, _ webView: WKWebView) {
+        guard let host = webView.url?.host else { return }
+        if let cached = Self.faviconCache[host] {
+            if tab.favicon == nil { tab.favicon = cached; rebuildTabBar() }
+            return
+        }
+        let js = "(document.querySelector(\"link[rel~='icon']\") || {}).href || ''"
+        webView.evaluateJavaScript(js) { [weak self, weak tab] result, _ in
+            let href = (result as? String).flatMap { $0.isEmpty ? nil : URL(string: $0) }
+            guard let url = href ?? webView.url.flatMap({ URL(string: "/favicon.ico", relativeTo: $0)?.absoluteURL }) else { return }
+            URLSession.shared.dataTask(with: url) { data, _, _ in
+                guard let data, let image = NSImage(data: data), image.size.width > 0 else { return }
+                DispatchQueue.main.async {
+                    Self.faviconCache[host] = image
+                    guard let self, let tab, tab.favicon == nil else { return }
+                    tab.favicon = image
+                    self.rebuildTabBar()
+                }
+            }.resume()
         }
     }
 

@@ -29,6 +29,14 @@ struct Settings: Codable {
     /// WKWebView 既定のUAには Version/Safari が無く、一部サイトが簡易版を返す
     var userAgentSuffix = "Version/26.0 Safari/605.1.15"
     var adBlockEnabled = true
+    /// Chromium タブを Idaten の窓に重ねて見せる(第1段の重ね窓)。**既定は false**。
+    ///
+    /// 本人の実機評価(2026-09-23): 「トレースされてる感じで1つのブラウザに見えない」。
+    /// 窓を動かすと中身が遅れて付いてくる / クリックで画面がちらつく / 他アプリの上に居座る /
+    /// クリックや入力の取りこぼし、の4つが同時に出た。別プロセスの窓を自分の窓の子にする公開APIが無い以上、
+    /// 位置合わせでは埋まらない差だと判断し、既定を元の「別窓で開く」に戻した。
+    /// 本命は Helium のフォーク(第2段)。重ね窓を試したい人だけ true にする
+    var dockChromiumWindow = false
     /// ページ内容から「Chrome拡張が要りそうか」をAppleの端末内モデルで判定し、Chromiumへの切替を提案する。
     ///
     /// **実機検証(2026-09-20)で既定OFFにした。** 2つの重大な問題を確認:

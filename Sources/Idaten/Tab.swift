@@ -1,3 +1,4 @@
+import AppKit
 import WebKit
 
 /// 1タブ。webView が nil で url があれば「休眠中」— メモリを持たず、選ばれたときに作り直す
@@ -22,6 +23,10 @@ final class Tab: NSObject {
     var urlAtCreate: URL?
     /// ⌘⇧E で WebKit へ戻したタブ。ドメイン例外やプロファイル既定が Chromium でも、このタブは WebKit のまま
     var forceWebKit = false
+    /// 重ね窓を使わない既定の経路で、別窓の Chromium へ渡したタブ(印だけ残す)
+    var handedOffExternally = false
+    /// タブに出すファビコン(ホスト単位で使い回す)
+    var favicon: NSImage?
     var observations: [NSKeyValueObservation] = []
     /// 休眠判定(evaluateJavaScript)が既に飛んでいるかどうか。無いと、メモリ逼迫のたびに同じタブへ
     /// 判定を重ねて発行してしまい、判定が返ってこないタブ(読み込み中など)で要求が積み上がっていく。

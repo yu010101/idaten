@@ -286,12 +286,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         ])
         _ = add("表示", [
             item("再読み込み", #selector(B.reload), "r"),
+            item("読み込みを停止", #selector(B.stopLoading), "."),
             item("戻る", #selector(B.goBack), "["),
             item("進む", #selector(B.goForward), "]"),
+            .separator(),
+            item("拡大", #selector(B.zoomIn), "+"),
+            item("縮小", #selector(B.zoomOut), "-"),
+            item("実際の大きさ", #selector(B.zoomReset), "0"),
         ])
+        _ = add("検索", [
+            item("ページ内を検索…", #selector(B.performFind), "f"),
+            item("次を検索", #selector(B.findNext), "g"),
+            item("前を検索", #selector(B.findPrevious), "g", [.command, .shift]),
+        ])
+        // ⌘1〜⌘8 はその番号、⌘9 は最後のタブ(Safari/Chrome と同じ慣習)
+        let numbered: [NSMenuItem] = (1...9).map { n in
+            let i = item(n == 9 ? "最後のタブ" : "\(n)番目のタブ", #selector(B.selectTabByNumber(_:)), "\(n)")
+            i.tag = n
+            return i
+        }
         _ = add("タブ", [
             item("次のタブ", #selector(B.nextTab), "]", [.command, .shift]),
             item("前のタブ", #selector(B.previousTab), "[", [.command, .shift]),
+            .separator(),
+        ] + numbered + [
+            .separator(),
             .separator(),
             item("ほかのタブを休眠させる", #selector(B.hibernateOthers), "z", [.command, .option]),
             .separator(),
