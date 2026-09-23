@@ -37,8 +37,15 @@ r.on('data', d => {
     pend.delete(m.id);
   }
 });
-const send = (method, params = {}, sessionId) =>
-  new Promise(res => { const i = ++id; pend.set(i, res); w.write(JSON.stringify({ id: i, method, params, sessionId }) + '\0'); });
+// 休眠したタブに evaluate すると応答が返らないことがある。時間切れを入れて止まらないようにする
+// (実測 2026-09-23: 状態確認の途中で計測全体が止まった)
+const send = (method, params = {}, sessionId, timeoutMs = 5000) =>
+  new Promise(res => {
+    const i = ++id;
+    const timer = setTimeout(() => { pend.delete(i); res({ id: i, result: null, timedOut: true }); }, timeoutMs);
+    pend.set(i, m => { clearTimeout(timer); res(m); });
+    w.write(JSON.stringify({ id: i, method, params, sessionId }) + '\0');
+  });
 const sleep = ms => new Promise(res => setTimeout(res, ms));
 
 await sleep(3000);

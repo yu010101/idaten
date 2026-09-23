@@ -1185,8 +1185,17 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
                 return
             }
             tab.chromiumTargetId = id
-            // 応答待ちの間に URL バーで別の URL を入れていたら、そちらへ移動し直す(Codexレビュー #10)
-            if let now = tab.url, now != tab.urlAtCreate { self.dock.navigate(id, to: now) }
+            // 応答待ちの間に URL バーで別の URL を入れていたら、そちらへ移動し直す(Codexレビュー #10)。
+            // ホストが変わっていたら、その新しいサイトの分の持ち込みもやり直す(Codexレビュー3 #8)
+            if let now = tab.url, now != tab.urlAtCreate {
+                if now.host != tab.urlAtCreate?.host {
+                    self.carryCookiesIfAllowed(for: now, cancelled: { false }) { [weak self] in
+                        self?.dock.navigate(id, to: now)
+                    }
+                } else {
+                    self.dock.navigate(id, to: now)
+                }
+            }
             // 渡す前に見ていた位置まで送る。読み込みが終わる前に送っても効かないので少し待つ
             if tab.scrollToRestoreInChromium > 50 {
                 let y = tab.scrollToRestoreInChromium
@@ -2112,12 +2121,11 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
             report["ruleLists"] = ruleLists.count
             report["adBlockEnabled"] = settings.adBlockEnabled
             // HttpOnly(JS から見えない)ログイン用Cookieも含めて、実際にディスクへ持続しているストアの中身を数える。
-            // 値そのものは書き出さない(ドメインと件数だけ) — 認証情報をログに残さないため
+            // **ドメインは書き出さない**。以前はドメインごとの件数を report.json に残していたので、
+            // 本人がどのサイトを使っているかがファイルに残っていた(Codexレビュー3 #10)。合計だけにする
             wv.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies in
-                var perDomain: [String: Int] = [:]
-                for c in cookies { perDomain[c.domain, default: 0] += 1 }
-                report["cookieDomains"] = perDomain
                 report["cookieTotal"] = cookies.count
+                report["cookieDomainCount"] = Set(cookies.map(\.domain)).count
                 if let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) {
                     try? data.write(to: dir.appendingPathComponent("report.json"))
                 }
