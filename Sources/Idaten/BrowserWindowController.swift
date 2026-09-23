@@ -373,6 +373,7 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
             return
         }
         root.hole = nil
+        if window.level != .normal { window.level = .normal }
         if tab.webView == nil {   // 休眠からの復帰
             let wv = makeWebView(tab)
             if let state = tab.interactionState {
@@ -610,9 +611,35 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         return CGRect(x: r.minX, y: primaryHeight - r.maxY, width: r.width, height: r.height)
     }
 
+    /// Chromium タブを見ている間、Idaten の枠(タブバー・URLバー)を Helium より上の階層に置く。
+    /// そうしないと、ページをクリックして Helium が前面に来た瞬間に Helium 自身のタブバーが顔を出し、
+    /// 「ブラウザが上下に2つ」に見える(本人の指摘 2026-09-23)。
+    /// ただし他のアプリへ移ったときまで浮いていると邪魔なので、Idaten か Helium が最前面のアプリのときだけ上げる
+    private var appActivationWatcher: Any?
+    /// front には「いま前面になったアプリ」の pid を渡す。NSWorkspace.frontmostApplication は
+    /// 切り替わりの通知を受けた時点でまだ古い値を返すことがあり、それで階層が上がらなかった(実測 2026-09-23)
+    private func updateWindowLevel(front: pid_t? = nil) {
+        let frontPid = front ?? NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let wantFloat = selected?.isChromium == true &&
+            (frontPid == ProcessInfo.processInfo.processIdentifier || (dock.pid != nil && frontPid == dock.pid))
+        let level: NSWindow.Level = wantFloat ? .floating : .normal
+        if window.level != level { window.level = level }
+    }
+
+    private func watchAppActivation() {
+        guard appActivationWatcher == nil else { return }
+        appActivationWatcher = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] note in
+            let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            self?.updateWindowLevel(front: app?.processIdentifier)
+        }
+    }
+
     private func showChromium(_ tab: Tab) {
         root.layoutSubtreeIfNeeded()
         root.hole = container.frame
+        watchAppActivation()
+        updateWindowLevel()
         progress.isHidden = true
         window.makeFirstResponder(nil)
         if case .failure = dock.ensureStarted() {
@@ -748,6 +775,23 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         guard let id = dockedTargetId else { return }
         dock.place(id, at: dockRect())
     }
+    /// Idaten だけが前面に出ると、Helium の窓は元の順のままなので、間に別アプリの窓が入り込む
+    /// (実測 2026-09-23: Idaten を前面にした直後、穴の下が iTerm2 になった)。
+    /// Chromium タブを見ている間に Idaten が前面へ来たら、Helium を上げ直してから自分を戻し、2枚を隣り合わせに保つ
+    private var lastRaise = Date.distantPast
+    func windowDidBecomeKey(_ notification: Notification) {
+        guard selected?.isChromium == true, let pid = dock.pid,
+              let helium = NSRunningApplication(processIdentifier: pid),
+              Date().timeIntervalSince(lastRaise) > 1 else { return }   // 自分を戻すと再び呼ばれるので間隔で止める
+        lastRaise = Date()
+        helium.activate(options: [.activateAllWindows])
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
+            guard let self, self.selected?.isChromium == true else { return }
+            NSApp.activate(ignoringOtherApps: true)
+            self.window.makeKeyAndOrderFront(nil)
+        }
+    }
+
     func windowDidMove(_ notification: Notification) { followWindow() }
     func windowDidResize(_ notification: Notification) { followWindow() }
     func windowDidEndLiveResize(_ notification: Notification) { followWindow() }
@@ -885,6 +929,34 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
     /// --selftest-dock <dir>: 「1ブラウザ」第1段の機械検査。画面収録の権限なしで、CDP が返す Helium の窓の位置と
     /// Idaten の内容領域を突き合わせる。①Chromiumで開く ②窓を動かして追従 ③WebKitタブへ切替→戻す ④結果を dock.json へ
     var selfTestDock = false
+
+    /// --dock-demo <url>: Chromium タブを開いたまま待機する(終了しない)。
+    /// 画面収録の権限が無くても、外から次の2つを機械的に確かめられるようにするためのモード:
+    ///   ①穴の位置に、Idaten と Helium の窓がこの順で重なっているか(CGWindowList は権限不要)
+    ///   ②穴の中心へのクリックが Helium のページに届くか(下の counts が増える)
+    func runDockDemo(url: URL, dir: URL) {
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        handOff(url, in: selected)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [self] in
+            guard let id = selected?.chromiumTargetId else { return }
+            dock.evaluate(id, "window.__idatenClicks = 0; addEventListener('mousedown', () => window.__idatenClicks++, true); 'ok'") { [self] _ in
+                Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [self] _ in
+                    guard let id = selected?.chromiumTargetId else { return }
+                    let r = dockRect()
+                    dock.evaluate(id, "({clicks: window.__idatenClicks, title: document.title, y: Math.round(window.scrollY)})") { [self] v in
+                        var info: [String: Any] = ["hole": ["left": Int(r.minX), "top": Int(r.minY), "width": Int(r.width), "height": Int(r.height)],
+                                                   "heliumPid": dock.pid.map { Int($0) } ?? -1,
+                                                   "idatenPid": ProcessInfo.processInfo.processIdentifier,
+                                                   "page": (v as? [String: Any]) ?? [:]]
+                        info["idatenActive"] = NSApp.isActive
+                        if let d = try? JSONSerialization.data(withJSONObject: info, options: [.sortedKeys]) {
+                            try? d.write(to: dir.appendingPathComponent("demo.json"), options: .atomic)
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     /// 穴越しのクリックが Helium に届くかの実測。Idaten を前面(キー窓)に戻してから、穴の中心の座標を
     /// clickpoint.json に書いて外(シェル)からの合成クリックを待ち、Helium のページが受けた回数を読む。

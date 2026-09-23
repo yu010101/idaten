@@ -106,5 +106,12 @@ struct ProfilePaths {
     var bookmarks: URL { dir.appendingPathComponent("bookmarks.json") }
     var session: URL { dir.appendingPathComponent("session.json") }
     var engineRules: URL { dir.appendingPathComponent("engine_rules.json") }
-    var chromiumProfile: URL { dir.appendingPathComponent("chromium-profile", isDirectory: true) }
+    /// 検査用に別の Chromium プロファイルを使えるようにしておく。同じ --user-data-dir で2つ起動すると、
+    /// 後から起動した方は既存のプロセスへ転送されて終了する(= Idaten からは操作できない)ため
+    var chromiumProfile: URL {
+        if let override = ProcessInfo.processInfo.environment["IDATEN_CHROMIUM_PROFILE"], !override.isEmpty {
+            return URL(fileURLWithPath: override, isDirectory: true)
+        }
+        return dir.appendingPathComponent("chromium-profile", isDirectory: true)
+    }
 }

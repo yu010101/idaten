@@ -271,9 +271,32 @@ final class ChromiumDock {
         place(id, at: rect) { if stillWanted() { cdp.send("Target.activateTarget", ["targetId": id]) } }
     }
 
-    /// Idaten の窓を動かした・大きさを変えたときの追従。前面には出さない
+    /// Helium 自身のタブバー+ツールバーの高さ。ページの外枠と中身の差から測る(版や設定で変わるので決め打ちしない)
+    private var chromeInset: [String: CGFloat] = [:]
+    private func withChromeInset(_ id: String, _ body: @escaping (CGFloat) -> Void) {
+        if let v = chromeInset[id] { body(v); return }
+        evaluate(id, "window.outerHeight - window.innerHeight") { [weak self] v in
+            let inset = CGFloat((v as? NSNumber)?.doubleValue ?? 0)
+            // 妙な値(全画面・読み込み前など)は使わない
+            let usable = (inset > 10 && inset < 300) ? inset : 0
+            if usable > 0 { self?.chromeInset[id] = usable }
+            body(usable)
+        }
+    }
+
+    /// Idaten の窓を動かした・大きさを変えたときの追従。前面には出さない。
+    /// rect は Idaten の内容領域。Helium 自身のタブバー/ツールバーがそこへ出てしまうと
+    /// 「ブラウザが上下に2つ」に見えるので、その分だけ上へずらして Idaten のツールバーの裏に隠す
     func place(_ id: String, at rect: CGRect, then: (() -> Void)? = nil) {
         guard let cdp else { return }
+        withChromeInset(id) { [weak self] inset in
+            guard let self, let cdp = self.cdp else { then?(); return }
+            let target = CGRect(x: rect.minX, y: rect.minY - inset, width: rect.width, height: rect.height + inset)
+            self.placeExact(cdp, id, target, then)
+        }
+    }
+
+    private func placeExact(_ cdp: CDPPipe, _ id: String, _ rect: CGRect, _ then: (() -> Void)?) {
         cdp.send("Browser.getWindowForTarget", ["targetId": id]) { r, _ in
             guard let wid = r?["windowId"] as? Int else { then?(); return }
             // 最小化中の窓は、いったん normal に戻してからでないと位置を受け付けない
