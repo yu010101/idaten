@@ -119,6 +119,8 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
     private var ruleLists: [WKContentRuleList] = []
 
     private let tabStack = NSStackView()
+    private let bookmarkBar = NSStackView()
+    private let bookmarkScroll = NSScrollView()
     private let tabScroll = NSScrollView()
     private let urlField = NSTextField()
     private let backButton = NSButton()
@@ -207,18 +209,33 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
 
         // 複数プロファイルのウィンドウを同時に開いたとき、どれがどのプロファインかを一目で(設計DBの"ビール3杯理論":
         // 文字を読まなくても色だけでわかるようにする)
-        let profileDot = NSView(frame: NSRect(x: 0, y: 0, width: 10, height: 10))
-        profileDot.wantsLayer = true
-        profileDot.layer?.backgroundColor = NSColor(hex: profile.colorHex).cgColor
-        profileDot.layer?.cornerRadius = 5
-        profileDot.toolTip = "プロファイル: \(profile.name)"
-        profileDot.widthAnchor.constraint(equalToConstant: 10).isActive = true
-        profileDot.heightAnchor.constraint(equalToConstant: 10).isActive = true
+        // 点を見せるだけだった部分を、押すとプロファイルを切り替えられるボタンにする
+        let colorHex = profile.colorHex
+        let dotImage = NSImage(size: NSSize(width: 10, height: 10), flipped: false) { rect in
+            NSColor(hex: colorHex).setFill()
+            NSBezierPath(ovalIn: rect).fill()
+            return true
+        }
+        let profileDot = NSButton(image: dotImage, target: self, action: #selector(showProfileMenu(_:)))
+        profileDot.isBordered = false
+        profileDot.title = ""              // 既定の "Button" が出ていた
+        profileDot.imagePosition = .imageOnly
+        profileDot.toolTip = "プロファイル: \(profile.name)(押すと切り替え)"
+        profileDot.setContentHuggingPriority(.required, for: .horizontal)
 
         let toolbar = NSStackView(views: [profileDot, backButton, forwardButton, reloadButton, urlField, bookmarkButton, engineButton, newTabButton])
         toolbar.orientation = .horizontal
         toolbar.spacing = 8
         toolbar.edgeInsets = NSEdgeInsets(top: 0, left: 10, bottom: 0, right: 10)
+
+        bookmarkBar.orientation = .horizontal
+        bookmarkBar.spacing = 2
+        bookmarkBar.alignment = .centerY
+        bookmarkBar.edgeInsets = NSEdgeInsets(top: 0, left: 8, bottom: 0, right: 8)
+        bookmarkBar.translatesAutoresizingMaskIntoConstraints = false
+        bookmarkScroll.documentView = bookmarkBar
+        bookmarkScroll.hasHorizontalScroller = false
+        bookmarkScroll.drawsBackground = false
 
         progress.style = .bar
         progress.isIndeterminate = false
@@ -227,7 +244,7 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         progress.controlSize = .small
         progress.isHidden = true
 
-        for v in [tabScroll, toolbar, progress, container] as [NSView] {
+        for v in [tabScroll, toolbar, bookmarkScroll, progress, container] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview(v)
         }
@@ -247,7 +264,15 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
             toolbar.trailingAnchor.constraint(equalTo: root.trailingAnchor),
             toolbar.heightAnchor.constraint(equalToConstant: 32),
 
-            progress.topAnchor.constraint(equalTo: toolbar.bottomAnchor),
+            bookmarkScroll.topAnchor.constraint(equalTo: toolbar.bottomAnchor),
+            bookmarkScroll.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            bookmarkScroll.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            bookmarkBarHeight,
+            bookmarkBar.topAnchor.constraint(equalTo: bookmarkScroll.contentView.topAnchor),
+            bookmarkBar.bottomAnchor.constraint(equalTo: bookmarkScroll.contentView.bottomAnchor),
+            bookmarkBar.leadingAnchor.constraint(equalTo: bookmarkScroll.contentView.leadingAnchor),
+
+            progress.topAnchor.constraint(equalTo: bookmarkScroll.bottomAnchor),
             progress.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             progress.trailingAnchor.constraint(equalTo: root.trailingAnchor),
             progress.heightAnchor.constraint(equalToConstant: 3),
@@ -267,6 +292,7 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
                                                      .value: profile.id, .expires: Date().addingTimeInterval(3600)])!
                 dataStore.httpCookieStore.setCookie(cookie, completionHandler: nil)
             }
+            rebuildBookmarkBar()
             restoreSession()
             for u in openURLs { newTab(url: u) }
             if tabs.isEmpty { newTab(url: URL(string: settings.homepage)) }
@@ -279,6 +305,56 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
             ruleLists = lists
             for e in errors { NSLog("Idaten adblock: %@", e) }
             begin()
+        }
+    }
+
+    private lazy var bookmarkBarHeight: NSLayoutConstraint = bookmarkScroll.heightAnchor.constraint(equalToConstant: 0)
+
+    /// ⇧⌘B。出す/しまうは設定に残す
+    @objc func toggleBookmarkBar() {
+        settings.bookmarkBarVisible.toggle()
+        settings.save()
+        rebuildBookmarkBar()
+    }
+
+    /// 自己検査のときだけ使う仮のブックマーク(ディスクには書かない)
+    var bookmarkBarPreview: [(title: String, url: String)] = []
+
+    func rebuildBookmarkBar() {
+        bookmarkBarHeight.constant = settings.bookmarkBarVisible ? 26 : 0
+        bookmarkScroll.isHidden = !settings.bookmarkBarVisible
+        bookmarkBar.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        guard settings.bookmarkBarVisible else { return }
+        let entries: [(title: String, url: String)] = bookmarkBarPreview.isEmpty
+            ? bookmarks.items.sorted(by: { $0.addedAt > $1.addedAt }).prefix(30).map { ($0.title, $0.url) }
+            : bookmarkBarPreview
+        for b in entries {
+            let button = NSButton(title: b.title.isEmpty ? (URL(string: b.url)?.host ?? b.url) : b.title,
+                                  target: self, action: #selector(openBookmarkFromBar(_:)))
+            button.isBordered = false
+            button.font = .systemFont(ofSize: 12)
+            button.contentTintColor = .labelColor
+            button.lineBreakMode = .byTruncatingTail
+            button.toolTip = b.url
+            button.identifier = NSUserInterfaceItemIdentifier(b.url)
+            button.widthAnchor.constraint(lessThanOrEqualToConstant: 160).isActive = true
+            bookmarkBar.addArrangedSubview(button)
+        }
+        if entries.isEmpty {
+            let empty = NSTextField(labelWithString: "⌘D で、いま見ているページをここに置けます")
+            empty.font = .systemFont(ofSize: 11)
+            empty.textColor = .secondaryLabelColor
+            bookmarkBar.addArrangedSubview(empty)
+        }
+    }
+
+    /// ⌘クリックなら裏のタブで開く(ブラウザ共通)
+    @objc private func openBookmarkFromBar(_ sender: NSButton) {
+        guard let url = sender.identifier.flatMap({ URL(string: $0.rawValue) }) else { return }
+        if NSEvent.modifierFlags.contains(.command) {
+            newTab(url: url, select: false, nextToCurrent: true)
+        } else {
+            open(url)
         }
     }
 
@@ -334,6 +410,8 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
             cell.wantsLayer = true
             cell.layer?.cornerRadius = 6
             cell.layer?.backgroundColor = (tab === selected ? NSColor.controlAccentColor.withAlphaComponent(0.18) : .clear).cgColor
+            cell.alphaValue = tab.isHibernated ? 0.5 : 1   // 休眠中は薄く(文字で「z」と書かない)
+            if tab.isHibernated { cell.toolTip = "休眠中 — 選ぶと読み直します" }
             tabStack.addArrangedSubview(cell)
         }
     }
@@ -416,7 +494,7 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
 
     @objc private func openContextLinkInTab() {
         guard let url = lastContextLink else { return }
-        newTab(url: url, select: false)
+        newTab(url: url, select: false, nextToCurrent: true)
     }
 
     @objc private func openContextLinkInChromium() {
@@ -472,12 +550,14 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
     /// `skipUIRebuild` は restoreSession() 専用: 全件追加し終えてから1回だけ rebuildTabBar()/saveSession() する
     @discardableResult
     func newTab(url: URL?, select: Bool = true, hibernated: Bool = false, title: String? = nil,
-                configuration: WKWebViewConfiguration? = nil, skipUIRebuild: Bool = false) -> Tab {
+                configuration: WKWebViewConfiguration? = nil, skipUIRebuild: Bool = false,
+                nextToCurrent: Bool = false) -> Tab {
         let tab = Tab()
         tab.url = url
         if let title { tab.title = title }
-        if let sel = selected, let i = tabs.firstIndex(where: { $0 === sel }), configuration != nil {
-            tabs.insert(tab, at: i + 1)   // リンクから開いたタブは隣に
+        // リンク由来(⌘クリック・右クリック・window.open)は今のタブの隣に開く。⌘T は末尾(ブラウザ共通の振る舞い)
+        if let sel = selected, let i = tabs.firstIndex(where: { $0 === sel }), configuration != nil || nextToCurrent {
+            tabs.insert(tab, at: i + 1)
         } else {
             tabs.append(tab)
         }
@@ -1020,11 +1100,16 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
             bookmarks.add(title: selected?.title.isEmpty == false ? selected!.title : url, url: url)
         }
         onBookmarksChanged?()
+        rebuildBookmarkBar()
         updateToolbar()
     }
 
     /// メニュー(main.swift)がブックマーク一覧を再構築する際のフック。追加/削除のたびに呼ぶ
     var onBookmarksChanged: (() -> Void)?
+    /// プロファイルの一覧はアプリ側(AppDelegate)が持っているので、そこに作ってもらって出す
+    var onProfileMenuRequested: ((NSButton) -> Void)?
+    @objc private func showProfileMenu(_ sender: NSButton) { onProfileMenuRequested?(sender) }
+
     @objc func focusURLField() { window.makeFirstResponder(urlField); urlField.selectText(nil) }
 
     /// 編集を始めたら、表示用に整えた文字列でなく本物のURLを入れる(コピー・手直しのため)
@@ -1423,6 +1508,21 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
 
     private func runSelfTest(_ wv: WKWebView, dir: URL) {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        // タブが増えたとき・休眠中・ブックマークバーの見た目も撮れるようにしておく
+        if ProcessInfo.processInfo.environment["IDATEN_SELFTEST_TABS"] == "1" {
+            settings.bookmarkBarVisible = true
+            // 見た目の確認用の仮データ。本人のブックマークファイルには書かない
+            // (一度 bookmarks.add で本当に書いてしまった。自己検査は利用者のデータを触らない)
+            bookmarkBarPreview = [("Radineer", "https://radineer.com/"), ("GIGAZINE（ギガジン）", "https://gigazine.net/")]
+            rebuildBookmarkBar()
+            for i in 1...7 {
+                let t = newTab(url: URL(string: "https://example.com/?t=\(i)"), select: false, hibernated: true,
+                               title: ["ニュース速報", "料理のレシピ", "GitHub - idaten", "天気予報", "地図", "翻訳", "カレンダー"][i - 1])
+                if i % 2 == 0 { t.favicon = nil }
+            }
+            rebuildTabBar()
+            window.layoutIfNeeded()
+        }
         // 検索バーの見た目も自己検査で撮れるようにしておく(画面収録の権限が無くても確認できる)
         if ProcessInfo.processInfo.environment["IDATEN_SELFTEST_FIND"] == "1" {
             performFind()
@@ -1539,7 +1639,7 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         if navigationAction.navigationType == .linkActivated, navigationAction.modifierFlags.contains(.command),
            let url = navigationAction.request.url {
             decisionHandler(.cancel)
-            newTab(url: url, select: false)
+            newTab(url: url, select: false, nextToCurrent: true)
             return
         }
         decisionHandler(.allow)

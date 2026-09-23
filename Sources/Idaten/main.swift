@@ -107,6 +107,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let controller = BrowserWindowController(profile: profile)
         controller.onClosed = { [weak self] in self?.windows.removeValue(forKey: profile.id) }
         controller.onDownloadsChanged = { [weak self] in self?.rebuildDownloadsMenu() }
+        // ツールバーの色の点から、プロファイルを切り替えられるようにする
+        controller.onProfileMenuRequested = { [weak self] button in
+            guard let self else { return }
+            let menu = NSMenu()
+            for p in self.profiles.sorted(by: { $0.lastOpenedAt > $1.lastOpenedAt }) {
+                let i = NSMenuItem(title: p.name, action: #selector(self.switchToProfile(_:)), keyEquivalent: "")
+                i.target = self
+                i.representedObject = p.id
+                i.state = p.id == profile.id ? .on : .off
+                let dot = NSImage(size: NSSize(width: 10, height: 10), flipped: false) { rect in
+                    NSColor(hex: p.colorHex).setFill()
+                    NSBezierPath(ovalIn: rect).fill()
+                    return true
+                }
+                i.image = dot
+                menu.addItem(i)
+            }
+            menu.addItem(.separator())
+            let add = NSMenuItem(title: "新しいプロファイル…", action: #selector(self.newProfile), keyEquivalent: "")
+            add.target = self
+            menu.addItem(add)
+            menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.height + 4), in: button)
+        }
         windows[profile.id] = controller
         if let i = profiles.firstIndex(where: { $0.id == profile.id }) {
             profiles[i].lastOpenedAt = Date()
@@ -231,6 +254,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard menu === bookmarkMenu else { return }
         menu.removeAllItems()
         let addItem = NSMenuItem(title: "このページをブックマーク", action: #selector(BrowserWindowController.toggleBookmarkCurrentPage), keyEquivalent: "d")
+        let barItem = NSMenuItem(title: "ブックマークバーを表示", action: #selector(BrowserWindowController.toggleBookmarkBar), keyEquivalent: "b")
+        barItem.keyEquivalentModifierMask = [.command, .shift]
+        menu.addItem(barItem)
         menu.addItem(addItem)
         menu.addItem(.separator())
         guard let list = activeBrowser?.bookmarks.items, !list.isEmpty else {

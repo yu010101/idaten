@@ -37,10 +37,8 @@ final class Tab: NSObject {
 
     /// エンジンは色ドット(BrowserWindowController.rebuildTabBar)で示すのでここには含めない。
     /// 休眠だけは文字で残す("z" は他の絵文字よりフォント依存が少なく、幅が安定する)
-    var displayTitle: String {
-        let base = title.isEmpty ? (url?.host ?? "新しいタブ") : title
-        return isHibernated ? "z " + base : base
-    }
+    /// 休眠中は「z」の文字でなく、タブ全体を薄く描いて示す(文字数を食わないので題名が読める)
+    var displayTitle: String { title.isEmpty ? (url?.host ?? "新しいタブ") : title }
 
     func dropWebView() {
         observations.removeAll()

@@ -37,6 +37,8 @@ struct Settings: Codable {
     /// 位置合わせでは埋まらない差だと判断し、既定を元の「別窓で開く」に戻した。
     /// 本命は Helium のフォーク(第2段)。重ね窓を試したい人だけ true にする
     var dockChromiumWindow = false
+    /// ツールバーの下にブックマークバーを出す(⇧⌘B で切り替え)
+    var bookmarkBarVisible = false
     /// ページ内容から「Chrome拡張が要りそうか」をAppleの端末内モデルで判定し、Chromiumへの切替を提案する。
     ///
     /// **実機検証(2026-09-20)で既定OFFにした。** 2つの重大な問題を確認:
