@@ -1302,7 +1302,10 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
     /// 重複は BookmarkStore が弾くので、何度呼んでも増えない
     private var importInFlight = false
     func importFromManagedChromium() {
-        guard selfTestDir == nil || sessionPathOverride != nil else { return }   // 自己検査では触らない
+        // 自己検査では走らせない。以前は「セッションの置き場所を差し替えているなら本物ではない」と
+        // 見なしていたが、--selftest-session は**本人のプロファイルの上で**セッションだけ差し替えるので、
+        // 取り込みが本人のブックマーク・履歴に対して走ってしまった(2026-09-23)
+        guard selfTestDir == nil else { return }
         guard !importInFlight else { return }     // 取り込みを重ねて走らせない(Codexレビュー3 #3)
         importInFlight = true
         let profileDir = paths.chromiumProfile
