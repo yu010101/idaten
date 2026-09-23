@@ -45,6 +45,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             browser.selfTestSetCookieDomain = args[i + 1]
         }
         if args.contains("--no-adblock") { browser.settings.adBlockEnabled = false }   // この起動だけ。設定ファイルは書き換えない
+        if let i = args.firstIndex(of: "--selftest-tabs"), args.indices.contains(i + 1) {
+            let dir = URL(fileURLWithPath: args[i + 1], isDirectory: true)
+            browser.selfTestDir = dir
+            browser.start(openURLs: [])
+            browser.runTabSelfTest(dir: dir)
+            return
+        }
         if let i = args.firstIndex(of: "--dock-demo"), args.indices.contains(i + 1) {
             // 利用者のセッションは読み書きしない。Chromium タブを1枚開いたまま待機する
             let dir = URL(fileURLWithPath: args[i + 1], isDirectory: true)
@@ -80,6 +87,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         let controller = BrowserWindowController(profile: profile)
         controller.onClosed = { [weak self] in self?.windows.removeValue(forKey: profile.id) }
+        controller.onDownloadsChanged = { [weak self] in self?.rebuildDownloadsMenu() }
         windows[profile.id] = controller
         if let i = profiles.firstIndex(where: { $0.id == profile.id }) {
             profiles[i].lastOpenedAt = Date()
@@ -200,6 +208,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// 開くたびに「今アクティブなプロファイル」のブックマークで作り直す(NSMenuDelegate、遅延構築)
     func menuNeedsUpdate(_ menu: NSMenu) {
+        if menu === downloadsMenu { rebuildDownloadsMenu(); return }
         guard menu === bookmarkMenu else { return }
         menu.removeAllItems()
         let addItem = NSMenuItem(title: "このページをブックマーク", action: #selector(BrowserWindowController.toggleBookmarkCurrentPage), keyEquivalent: "d")
@@ -240,6 +249,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         newItem.keyEquivalentModifierMask = [.command, .shift]
         newItem.target = self
         menu.addItem(newItem)
+    }
+
+    private var downloadsMenu: NSMenu?
+
+    /// ダウンロードの一覧をメニューに反映する。項目を選ぶと Finder で場所を開く
+    private func rebuildDownloadsMenu() {
+        guard let menu = downloadsMenu else { return }
+        menu.removeAllItems()
+        let items = activeBrowser?.downloads ?? []
+        if items.isEmpty {
+            menu.addItem(NSMenuItem(title: "(ダウンロードはまだありません)", action: nil, keyEquivalent: ""))
+            return
+        }
+        for d in items.prefix(15) {
+            let state = d.failed != nil ? "失敗: \(d.failed!)" : (d.done ? "" : "(受信中)")
+            let i = NSMenuItem(title: state.isEmpty ? d.name : "\(d.name) \(state)",
+                               action: #selector(BrowserWindowController.revealDownload(_:)), keyEquivalent: "")
+            i.representedObject = d.destination
+            i.target = activeBrowser
+            i.isEnabled = d.destination != nil
+            menu.addItem(i)
+        }
+        menu.addItem(.separator())
+        let folder = NSMenuItem(title: "ダウンロードフォルダを開く", action: #selector(openDownloadsFolder), keyEquivalent: "")
+        folder.target = self
+        menu.addItem(folder)
+    }
+
+    @objc private func openDownloadsFolder() {
+        let dir = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0]
+        NSWorkspace.shared.open(dir)
     }
 
     private func buildMenu() {
@@ -294,6 +334,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             item("縮小", #selector(B.zoomOut), "-"),
             item("実際の大きさ", #selector(B.zoomReset), "0"),
         ])
+        downloadsMenu = add("ダウンロード", [])
+        downloadsMenu?.delegate = self   // 開くたびに今の一覧で作り直す
         _ = add("検索", [
             item("ページ内を検索…", #selector(B.performFind), "f"),
             item("次を検索", #selector(B.findNext), "g"),

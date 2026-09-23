@@ -1,6 +1,45 @@
 import AppKit
 import WebKit
 
+/// 右クリックのメニューに項目を足すために被せる。WKWebView の既定メニューは willOpenMenu で触れる
+final class IdatenWebView: WKWebView {
+    weak var owner: BrowserWindowController?
+    override func willOpenMenu(_ menu: NSMenu, with event: NSEvent) {
+        owner?.augmentContextMenu(menu)
+        super.willOpenMenu(menu, with: event)
+    }
+}
+
+/// タブ1枚分の器。ボタンでは拾えない操作(横へのドラッグで並べ替え・中クリックで閉じる)を受け持つ
+final class TabCellView: NSStackView {
+    var onSelect: (() -> Void)?
+    var onClose: (() -> Void)?
+    /// ドラッグ中に「いまどこへ落とそうとしているか」を伝える。戻り値は並べ替え後の自分の位置
+    var onDrag: ((CGFloat) -> Void)?
+
+    override func mouseDown(with event: NSEvent) {
+        onSelect?()
+        // 数ピクセル動いたら並べ替えとみなす(ただの選択と区別する)
+        var dragging = false
+        let start = event.locationInWindow
+        window?.trackEvents(matching: [.leftMouseDragged, .leftMouseUp], timeout: 10, mode: .eventTracking) { e, stop in
+            guard let e else { stop.pointee = true; return }
+            switch e.type {
+            case .leftMouseDragged:
+                let dx = e.locationInWindow.x - start.x
+                if dragging || abs(dx) > 4 { dragging = true; self.onDrag?(e.locationInWindow.x) }
+            default:
+                stop.pointee = true
+            }
+        }
+    }
+
+    /// 中ボタン(ホイール押し込み)で閉じる — ブラウザ共通の操作
+    override func otherMouseDown(with event: NSEvent) {
+        if event.buttonNumber == 2 { onClose?() } else { super.otherMouseDown(with: event) }
+    }
+}
+
 /// 窓の背景を自前で塗る。Chromium タブを表示中は内容領域だけ塗らずに透明の穴にし、
 /// 真下に重ねた Helium の窓を見せる(透明な画素へのクリックは macOS が下の窓へ通す)
 final class HoledRootView: NSView {
@@ -58,7 +97,7 @@ final class HoledRootView: NSView {
 }
 
 final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
-    WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate, ChromiumDockDelegate {
+    WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate, WKScriptMessageHandler, ChromiumDockDelegate {
 
     let window: NSWindow
     let profile: Profile
@@ -264,12 +303,11 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
             }
             mark.toolTip = chromiumTab ? "Chromiumエンジンで表示中" : "WebKitエンジンで表示中"
 
-            let title = NSButton(title: tab.displayTitle, target: self, action: #selector(tabClicked(_:)))
-            title.tag = i
-            title.isBordered = false
+            // 題名はラベルにする(ボタンだとドラッグでの並べ替えを器が拾えない)
+            let title = NSTextField(labelWithString: tab.displayTitle)
             title.lineBreakMode = .byTruncatingTail
             title.font = .systemFont(ofSize: 12, weight: tab === selected ? .semibold : .regular)
-            title.contentTintColor = tab === selected ? .labelColor : .secondaryLabelColor
+            title.textColor = tab === selected ? .labelColor : .secondaryLabelColor
             title.widthAnchor.constraint(lessThanOrEqualToConstant: 170).isActive = true
             let close = NSButton(image: NSImage(systemSymbolName: "xmark", accessibilityDescription: "閉じる")!,
                                  target: self, action: #selector(tabCloseClicked(_:)))
@@ -277,7 +315,11 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
             close.isBordered = false
             close.imageScaling = .scaleProportionallyDown
             close.widthAnchor.constraint(equalToConstant: 14).isActive = true
-            let cell = NSStackView(views: [mark, title, close])
+            let cell = TabCellView(views: [mark, title, close])
+            cell.onSelect = { [weak self, weak tab] in if let self, let tab { self.select(tab) } }
+            cell.onClose = { [weak self, weak tab] in if let self, let tab { self.close(tab) } }
+            cell.onDrag = { [weak self, weak tab] x in if let self, let tab { self.dragTab(tab, toWindowX: x) } }
+            cell.toolTip = tab.url?.absoluteString
             cell.orientation = .horizontal
             cell.spacing = 4
             cell.edgeInsets = NSEdgeInsets(top: 3, left: 8, bottom: 3, right: 6)
@@ -321,16 +363,73 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
     private func makeConfiguration() -> WKWebViewConfiguration {
         let conf = WKWebViewConfiguration()
         conf.websiteDataStore = dataStore   // このプロファイル専用のCookie/ログイン状態
+        installContextMenuBridge(conf)
         conf.applicationNameForUserAgent = settings.userAgentSuffix
         conf.preferences.isElementFullscreenEnabled = true
         for l in ruleLists { conf.userContentController.add(l) }
         return conf
     }
 
+    /// 右クリックした場所のリンクを知るための橋渡し。WebKit の既定メニューは「どのリンクか」を教えてくれないので、
+    /// contextmenu のときに一番近い <a href> をページ側から送ってもらう
+    private func installContextMenuBridge(_ conf: WKWebViewConfiguration) {
+        let ucc = conf.userContentController
+        ucc.removeScriptMessageHandler(forName: "idatenContext")   // window.open 由来の使い回しで二重登録になるのを防ぐ
+        ucc.add(self, name: "idatenContext")
+        let js = """
+        document.addEventListener('contextmenu', function (e) {
+          var a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+          window.webkit.messageHandlers.idatenContext.postMessage(a ? a.href : '');
+        }, true);
+        """
+        ucc.addUserScript(WKUserScript(source: js, injectionTime: .atDocumentStart, forMainFrameOnly: false))
+    }
+
+    private var lastContextLink: URL?
+
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard message.name == "idatenContext" else { return }
+        lastContextLink = (message.body as? String).flatMap { $0.isEmpty ? nil : URL(string: $0) }
+    }
+
+    /// 右クリックメニューの先頭に、ブラウザとして当たり前の項目を足す
+    func augmentContextMenu(_ menu: NSMenu) {
+        guard let url = lastContextLink else { return }
+        let inTab = NSMenuItem(title: "リンクを新しいタブで開く", action: #selector(openContextLinkInTab), keyEquivalent: "")
+        let inChromium = NSMenuItem(title: "リンクを Chromium で開く", action: #selector(openContextLinkInChromium), keyEquivalent: "")
+        let copy = NSMenuItem(title: "リンクをコピー", action: #selector(copyContextLink), keyEquivalent: "")
+        for (i, item) in [inTab, inChromium, copy].enumerated() {
+            item.target = self
+            item.representedObject = url
+            menu.insertItem(item, at: i)
+        }
+        menu.insertItem(.separator(), at: 3)
+    }
+
+    @objc private func openContextLinkInTab() {
+        guard let url = lastContextLink else { return }
+        newTab(url: url, select: false)
+    }
+
+    @objc private func openContextLinkInChromium() {
+        guard let url = lastContextLink else { return }
+        handOff(url)
+    }
+
+    @objc private func copyContextLink() {
+        guard let url = lastContextLink else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(url.absoluteString, forType: .string)
+    }
+
     private func makeWebView(_ tab: Tab, configuration: WKWebViewConfiguration? = nil) -> WKWebView {
         let conf = configuration ?? makeConfiguration()
-        if configuration != nil { for l in ruleLists { conf.userContentController.add(l) } }
-        let wv = WKWebView(frame: .zero, configuration: conf)
+        if configuration != nil {
+            for l in ruleLists { conf.userContentController.add(l) }
+            installContextMenuBridge(conf)
+        }
+        let wv = IdatenWebView(frame: .zero, configuration: conf)
+        wv.owner = self
         wv.navigationDelegate = self
         wv.uiDelegate = self   // 無いと confirm()/alert() が黙って「いいえ」を返す
         wv.allowsBackForwardNavigationGestures = true
@@ -1018,6 +1117,23 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         select(tabs[(i + d + tabs.count) % tabs.count])
     }
 
+    /// ドラッグ中の x 座標から「何番目の位置か」を求めて、その場で並べ替える。
+    /// タブの幅は内容で変わるので、各タブの中心と比べて挿入位置を決める
+    func dragTab(_ tab: Tab, toWindowX x: CGFloat) {
+        guard let from = tabs.firstIndex(where: { $0 === tab }) else { return }
+        let centers = tabStack.arrangedSubviews.map { v -> CGFloat in
+            let r = v.convert(v.bounds, to: nil)
+            return r.midX
+        }
+        var to = centers.firstIndex(where: { x < $0 }) ?? tabs.count - 1
+        to = min(max(0, to), tabs.count - 1)
+        guard to != from else { return }
+        tabs.remove(at: from)
+        tabs.insert(tab, at: to)
+        rebuildTabBar()
+        saveSession()
+    }
+
     @objc private func tabClicked(_ sender: NSButton) { if tabs.indices.contains(sender.tag) { select(tabs[sender.tag]) } }
     @objc private func tabCloseClicked(_ sender: NSButton) { if tabs.indices.contains(sender.tag) { close(tabs[sender.tag]) } }
 
@@ -1106,6 +1222,28 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
     /// --selftest-dock <dir>: 「1ブラウザ」第1段の機械検査。画面収録の権限なしで、CDP が返す Helium の窓の位置と
     /// Idaten の内容領域を突き合わせる。①Chromiumで開く ②窓を動かして追従 ③WebKitタブへ切替→戻す ④結果を dock.json へ
     var selfTestDock = false
+
+    /// --selftest-tabs <dir>: タブの並べ替え(ドラッグ相当)と中クリックで閉じる経路を機械的に確かめる
+    func runTabSelfTest(dir: URL) {
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        for i in 1...3 { newTab(url: URL(string: "https://example.com/?t=\(i)"), select: false, hibernated: true, title: "タブ\(i)") }
+        rebuildTabBar()
+        window.layoutIfNeeded()
+        var report: [String: Any] = ["before": tabs.map(\.title)]
+        // 1枚目を一番右へ運ぶ(器の中心より右の座標を渡す)
+        if let first = tabs.first, let lastView = tabStack.arrangedSubviews.last {
+            let x = lastView.convert(lastView.bounds, to: nil).maxX + 20
+            dragTab(first, toWindowX: x)
+        }
+        report["afterDragFirstToEnd"] = tabs.map(\.title)
+        // 中クリックで閉じる経路(TabCellView.onClose と同じ)
+        if let second = tabs.first(where: { $0.title == "タブ2" }) { close(second) }
+        report["afterMiddleClickClose"] = tabs.map(\.title)
+        if let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) {
+            try? data.write(to: dir.appendingPathComponent("tabs.json"))
+        }
+        NSApp.terminate(nil)
+    }
 
     /// --dock-demo <url>: Chromium タブを開いたまま待機する(終了しない)。
     /// 画面収録の権限が無くても、外から次の2つを機械的に確かめられるようにするためのモード:
@@ -1429,6 +1567,19 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
 
     // MARK: - WKDownloadDelegate
 
+    // MARK: - ダウンロード一覧
+    /// 何がどこへ落ちたかを覚えておく(これまでは完了音だけで、保存先が分からなかった)。
+    /// 一覧はメニューから開く。中身はこの起動中だけ持つ
+    struct DownloadRecord { var name: String; var destination: URL?; var done: Bool; var failed: String? }
+    private(set) var downloads: [DownloadRecord] = []
+    private var downloadIndex: [ObjectIdentifier: Int] = [:]
+    var onDownloadsChanged: (() -> Void)?
+
+    @objc func revealDownload(_ sender: NSMenuItem) {
+        guard let url = sender.representedObject as? URL else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
     func download(_ download: WKDownload, decideDestinationUsing response: URLResponse, suggestedFilename: String,
                   completionHandler: @escaping (URL?) -> Void) {
         let dir = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0]
@@ -1439,14 +1590,26 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
             n += 1
             dest = dir.appendingPathComponent(ext.isEmpty ? "\(base) \(n)" : "\(base) \(n).\(ext)")
         }
+        downloads.insert(DownloadRecord(name: dest.lastPathComponent, destination: dest, done: false, failed: nil), at: 0)
+        downloadIndex[ObjectIdentifier(download)] = 0
+        for (k, v) in downloadIndex where k != ObjectIdentifier(download) { downloadIndex[k] = v + 1 }
+        onDownloadsChanged?()
         completionHandler(dest)
     }
 
     func downloadDidFinish(_ download: WKDownload) {
+        if let i = downloadIndex[ObjectIdentifier(download)], downloads.indices.contains(i) {
+            downloads[i].done = true
+            onDownloadsChanged?()
+        }
         NSSound(named: "Glass")?.play()
     }
 
     func download(_ download: WKDownload, didFailWithError error: Error, resumeData: Data?) {
+        if let i = downloadIndex[ObjectIdentifier(download)], downloads.indices.contains(i) {
+            downloads[i].failed = error.localizedDescription
+            onDownloadsChanged?()
+        }
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "ダウンロードに失敗しました"
