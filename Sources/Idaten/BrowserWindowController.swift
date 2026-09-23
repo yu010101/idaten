@@ -683,6 +683,7 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         }
         root.hole = nil
         if window.level != .normal { window.level = .normal }
+        container.subviews.forEach { $0.removeFromSuperview() }   // Chromium タブの案内が残らないように
         if tab.webView == nil {   // 休眠からの復帰
             let wv = makeWebView(tab)
             if let state = tab.interactionState {
@@ -844,6 +845,11 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
     @objc func switchEngine() {
         guard let tab = selected, let url = tab.url, let host = url.host else { return }
         if tab.isChromium { moveBackToWebKit(tab); return }
+        if tab.handedOffExternally {
+            // 既に外部の Chromium へ渡したタブ。もう一度押しても同じページを2枚開かない(向こうを前に出すだけ)
+            _ = chromium.open(url)
+            return
+        }
         let already = rules.engine(forHost: host, profileDefault: profile.defaultEngine) == .chromium
         let alert = NSAlert()
         alert.messageText = "このページを Chromium エンジンで開きます"
@@ -884,8 +890,10 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
     @discardableResult
     private func handOff(_ url: URL, in tab: Tab? = nil, activate: Bool = true) -> Bool {
         if let tab, tab.forceWebKit { return false }
-        // 既定は従来どおり「別窓で開く」。重ね窓は設定で選んだときだけ(Settings.dockChromiumWindow を参照)
-        guard settings.dockChromiumWindow else {
+        // 取り込み(mirrorChromiumTabs)が有効なら、Helium を子プロセスとして起動して CDP でつなぎ、
+        // 向こうのタブを Idaten のタブバーに並べる。窓を重ねるかどうかは別の設定(dockChromiumWindow)。
+        // 取り込みを切っている場合だけ、従来どおり「別アプリとして渡すだけ」にする
+        guard settings.mirrorChromiumTabs else {
             switch chromium.open(url) {
             case .success:
                 tab?.handedOffExternally = true
@@ -965,23 +973,108 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
     }
 
     private func showChromium(_ tab: Tab) {
-        root.layoutSubtreeIfNeeded()
-        root.hole = container.frame
-        watchAppActivation()
-        updateWindowLevel()
         progress.isHidden = true
-        window.makeFirstResponder(nil)
+        if settings.dockChromiumWindow {
+            root.layoutSubtreeIfNeeded()
+            root.hole = container.frame
+            watchAppActivation()
+            updateWindowLevel()
+            window.makeFirstResponder(nil)
+        } else {
+            root.hole = nil
+            showChromiumPlaceholder(tab)
+        }
         if case .failure = dock.ensureStarted() {
             // Helium が無い等。従来どおり別アプリとして渡す経路へ落とす
             if let url = tab.url { _ = chromium.open(url) }
             return
         }
         if let id = tab.chromiumTargetId {
-            dockedTargetId = id
-            dock.show(id, at: dockRect(), stillWanted: { [weak self, weak tab] in tab != nil && self?.selected === tab })
+            if settings.dockChromiumWindow {
+                dockedTargetId = id
+                dock.show(id, at: dockRect(), stillWanted: { [weak self, weak tab] in tab != nil && self?.selected === tab })
+            } else {
+                // 窓は重ねない。向こうのタブを選び、Helium を前面に出す
+                dock.activateInHelium(id)
+            }
             return
         }
         requestChromiumTarget(tab)
+    }
+
+    /// 窓を重ねないときに、Idaten 側の内容領域へ出す案内。
+    /// ここに何も出さないと「タブを選んだのに真っ白」になる
+    private func showChromiumPlaceholder(_ tab: Tab) {
+        container.subviews.forEach { $0.removeFromSuperview() }
+        let title = NSTextField(labelWithString: tab.title.isEmpty ? (tab.url?.host ?? "Chromium のタブ") : tab.title)
+        title.font = .systemFont(ofSize: 15, weight: .semibold)
+        let sub = NSTextField(labelWithString: "このタブは Chromium(拡張が使えるエンジン)で開いています。\n表示と操作は Chromium の窓で行います。")
+        sub.font = .systemFont(ofSize: 12)
+        sub.textColor = .secondaryLabelColor
+        sub.alignment = .center
+        sub.maximumNumberOfLines = 3
+        let show = NSButton(title: "Chromium の窓を前に出す", target: self, action: #selector(bringChromiumToFront))
+        let back = NSButton(title: "このタブを WebKit に戻す (⌘⇧E)", target: self, action: #selector(switchEngine))
+        back.bezelStyle = .inline
+        let stack = NSStackView(views: [title, sub, show, back])
+        stack.orientation = .vertical
+        stack.spacing = 10
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.centerXAnchor.constraint(equalTo: container.centerXAnchor),
+            stack.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+            stack.widthAnchor.constraint(lessThanOrEqualTo: container.widthAnchor, multiplier: 0.8),
+        ])
+    }
+
+    // MARK: - Chromium 側の拡張を Idaten から起こす
+
+    /// いま選んでいる Chromium タブに対して、拡張のボタンを押したのと同じことをする。
+    /// Claude ならサイドパネルが開く。表示は Helium の窓の中なので、そこは正直に案内する
+    @objc func showExtensionMenu(_ sender: Any?) {
+        guard let tab = selected, tab.isChromium, let pageId = tab.chromiumTargetId else {
+            let a = NSAlert()
+            a.messageText = "Chromium のタブを選んでください"
+            a.informativeText = "拡張は Chromium 側で動きます。⌘⇧E でこのページを Chromium で開くと使えます。"
+            a.runModal()
+            return
+        }
+        let items = ChromiumExtensions.installed(profileDir: paths.chromiumProfile).filter(\.hasAction)
+        let menu = NSMenu()
+        if items.isEmpty {
+            menu.addItem(NSMenuItem(title: "(拡張が入っていません)", action: nil, keyEquivalent: ""))
+        }
+        for item in items {
+            let mi = NSMenuItem(title: item.name, action: #selector(triggerExtensionFromMenu(_:)), keyEquivalent: "")
+            mi.target = self
+            mi.representedObject = [item.id, pageId]
+            menu.addItem(mi)
+        }
+        if let event = NSApp.currentEvent, let view = sender as? NSView {
+            NSMenu.popUpContextMenu(menu, with: event, for: view)
+        } else {
+            menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
+        }
+    }
+
+    @objc private func triggerExtensionFromMenu(_ sender: NSMenuItem) {
+        guard let pair = sender.representedObject as? [String], pair.count == 2 else { return }
+        dock.triggerExtension(pair[0], onPage: pair[1]) { [weak self] error in
+            guard let error else {
+                self?.dock.activateInHelium(pair[1])   // 拡張のUIは Helium の窓の中に出る
+                return
+            }
+            let a = NSAlert()
+            a.messageText = "拡張を起動できませんでした"
+            a.informativeText = error
+            a.runModal()
+        }
+    }
+
+    @objc private func bringChromiumToFront() {
+        guard let id = selected?.chromiumTargetId else { return }
+        dock.activateInHelium(id)
     }
 
     /// Helium にこのタブのページを作ってもらう。応答が来た時点でタブが閉じられていたり WebKit へ戻されていたら、
@@ -1419,6 +1512,63 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
     /// --selftest-dock <dir>: 「1ブラウザ」第1段の機械検査。画面収録の権限なしで、CDP が返す Helium の窓の位置と
     /// Idaten の内容領域を突き合わせる。①Chromiumで開く ②窓を動かして追従 ③WebKitタブへ切替→戻す ④結果を dock.json へ
     var selfTestDock = false
+
+    /// --selftest-handoff <dir> <url>: Chromium タブの取り込みと拡張の起動を確かめる
+    func runHandoffSelfTest(url: URL, dir: URL) {
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        var report: [String: Any] = [:]
+        let historyBefore = history.recent(limit: 10000).count
+        selfTestDir = nil                       // 履歴とセッションの経路を通す(置き場所は隔離済み)
+
+        let wait = { (sec: Double, f: @escaping () -> Void) in DispatchQueue.main.asyncAfter(deadline: .now() + sec, execute: f) }
+        func finish() {
+            report["historyBefore"] = historyBefore
+            report["historyAfter"] = history.recent(limit: 10000).count
+            report["tabs"] = tabs.map { t -> [String: Any] in
+                ["url": t.url?.absoluteString ?? "", "chromium": t.isChromium,
+                 "target": t.chromiumTargetId ?? "", "hasWebView": t.webView != nil]
+            }
+            report["staleWebKitTabs"] = tabs.filter { ($0.isChromium || $0.handedOffExternally) && $0.webView != nil }.count
+            if let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) {
+                try? data.write(to: dir.appendingPathComponent("handoff.json"))
+            }
+            dock.shutdown()
+            wait(2) { NSApp.terminate(nil) }
+        }
+
+        // 1) ⌘⇧E 相当: いまのタブを Chromium へ
+        handOff(url, in: selected)
+        wait(8) { [self] in
+            report["mirroredAfterHandoff"] = tabs.filter { $0.isChromium && $0.chromiumTargetId != nil }.count
+            // 2) Helium 側で別のページを開く(利用者が Chromium の中で ⌘T したのと同じ)
+            dock.createTargetAsIfFromHelium(URL(string: "https://example.com/?from=helium")!)
+            wait(6) { [self] in
+                report["tabsAfterHeliumOpen"] = tabs.count
+                report["mirroredFromHelium"] = tabs.contains { $0.url?.absoluteString.contains("from=helium") == true }
+                // 3) 拡張を起こす(入っていれば)
+                let exts = ChromiumExtensions.installed(profileDir: paths.chromiumProfile).filter(\.hasAction)
+                report["extensionsFound"] = exts.map { "\($0.name) \($0.version)" }
+                guard let target = selected?.chromiumTargetId, let claude = exts.first(where: { $0.name.contains("Claude") }) ?? exts.first else {
+                    report["triggerSkipped"] = "拡張が無い"
+                    wait(2) { finish() }
+                    return
+                }
+                dock.triggerExtension(claude.id, onPage: target) { [self] err in
+                    report["triggerError"] = err ?? "なし"
+                    report["triggered"] = claude.name
+                    wait(5) { [self] in
+                        // 4) 拡張のページ(サイドパネル等)が現れたか
+                        dock.listTargets { infos in
+                            report["extensionPages"] = infos.filter { ($0["url"] as? String)?.hasPrefix("chrome-extension://") == true }
+                                .compactMap { ($0["url"] as? String)?.prefix(60).description }
+                            report["browserAlive"] = !infos.isEmpty
+                            finish()
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     /// --selftest-session <dir>: 「タブを失わない」ことの検査。200件を保存 → 読み直し、
     /// URL・順序・選択位置が完全一致するかを見る(以前は60件を超えた分を捨てていた)

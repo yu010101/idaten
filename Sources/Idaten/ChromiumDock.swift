@@ -262,6 +262,43 @@ final class ChromiumDock {
 
     func closeTarget(_ id: String) { cdp?.send("Target.closeTarget", ["targetId": id]) }
 
+    /// 自己検査用: 「利用者が Helium の中で ⌘T した」のと同じ作り方でタブを開く。
+    /// createTarget() の方は Idaten 側の要求として帳簿に載せるので、取り込み経路の検査には使えない
+    func createTargetAsIfFromHelium(_ url: URL) {
+        cdp?.send("Target.createTarget", ["url": url.absoluteString])
+    }
+
+    /// 自己検査用: いまあるターゲットの一覧(page/tab/service_worker 全部)
+    func listTargets(_ done: @escaping ([[String: Any]]) -> Void) {
+        guard let cdp else { done([]); return }
+        cdp.send("Target.getTargets", ["filter": [[:]]]) { r, _ in
+            done((r?["targetInfos"] as? [[String: Any]]) ?? [])
+        }
+    }
+
+    /// そのページを含む「タブ」ターゲットの id を返す。Extensions.triggerAction は page でなく tab を要求する。
+    /// Target.getTargets の既定は tab を返さないので、filter を明示する
+    func tabTargetId(forPage pageId: String, _ done: @escaping (String?) -> Void) {
+        guard let cdp else { done(nil); return }
+        cdp.send("Target.getTargets", ["filter": [["type": "tab"], ["type": "page"]]]) { r, _ in
+            let infos = (r?["targetInfos"] as? [[String: Any]]) ?? []
+            let pageURL = infos.first { $0["targetId"] as? String == pageId }?["url"] as? String
+            // tab と page は別のターゲットだが URL で対応づけられる(同じタブの表と裏)
+            let tab = infos.first { $0["type"] as? String == "tab" && ($0["url"] as? String) == pageURL }
+            done(tab?["targetId"] as? String ?? (infos.first { $0["type"] as? String == "tab" }?["targetId"] as? String))
+        }
+    }
+
+    /// 拡張の既定の操作(ツールバーのボタンを押したのと同じ)を起こす。
+    /// Claude なら サイドパネルが開き、1Password なら入力候補の窓が出る
+    func triggerExtension(_ extensionId: String, onPage pageId: String, _ done: @escaping (String?) -> Void) {
+        guard let cdp else { done("Chromium に繋がっていません"); return }
+        tabTargetId(forPage: pageId) { tabId in
+            guard let tabId else { done("対象のタブが見つかりません"); return }
+            cdp.send("Extensions.triggerAction", ["id": extensionId, "targetId": tabId]) { _, err in done(err) }
+        }
+    }
+
     /// 窓を rect(CDPの座標系: 主画面の左上原点・ポイント)へ動かしてから、そのタブを前面へ。
     /// activateTarget は Helium を前面のアプリにする — キー入力をそのままページへ届けるため意図してそうしている
     /// `stillWanted` は前面化の直前に確かめる。位置合わせの往復中に WebKit タブへ切り替えられていたら
@@ -281,6 +318,15 @@ final class ChromiumDock {
             let usable = (inset > 10 && inset < 300) ? inset : 0
             if usable > 0 { self?.chromeInset[id] = usable }
             body(usable)
+        }
+    }
+
+    /// 窓は重ねずに、そのタブを Helium 側で選び、Helium を前面のアプリにする。
+    /// 「タブの一覧は Idaten、表示は Helium」という使い方のための最小の橋
+    func activateInHelium(_ id: String) {
+        cdp?.send("Target.activateTarget", ["targetId": id])
+        if let pid, let app = NSRunningApplication(processIdentifier: pid) {
+            app.activate(options: [.activateAllWindows])
         }
     }
 

@@ -46,6 +46,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         if args.contains("--no-adblock") { browser.settings.adBlockEnabled = false }   // この起動だけ。設定ファイルは書き換えない
         // --selftest-panels <dir>: 設定・履歴の画面を描き出して見た目を確かめる(画面収録の権限が無くても見られる)
+        // --selftest-handoff <dir> <url>: Chromium タブの取り込みと拡張の起動を確かめる。
+        // プロファイルの置き場所を差し替えるので、利用者のデータには触らない
+        if let i = args.firstIndex(of: "--selftest-handoff"), args.indices.contains(i + 1) {
+            let dir = URL(fileURLWithPath: args[i + 1], isDirectory: true)
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            ProfilePaths.directoryOverride = dir
+            let isolated = BrowserWindowController(profile: Profile.makeNew(name: "handoff", colorHex: "#888888"))
+            windows["handoff"] = isolated
+            isolated.selfTestDir = dir
+            isolated.start(openURLs: [])
+            if let url = argURLs.first { isolated.runHandoffSelfTest(url: url, dir: dir) }
+            return
+        }
+
         // --bench-isolated <dir>: 比較計測用。プロファイルの置き場所・Cookie・履歴・セッションを
         // すべてその dir の下に作る(Chrome の新品プロファイルと条件を揃えるため)。
         // 本人のデータには一切触らない
@@ -456,6 +470,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             item("ほかのタブを休眠させる", #selector(B.hibernateOthers), "z", [.command, .option]),
             .separator(),
             item("エンジンを切り替える(Chromiumで開く)", #selector(B.switchEngine), "e", [.command, .shift]),
+            item("Chromium の拡張を使う…", #selector(B.showExtensionMenu(_:)), "e", [.command, .option]),
             .separator(),
             item("[デバッグ] 状態をダンプ", #selector(B.debugDumpState), "d", [.command, .option]),
         ])

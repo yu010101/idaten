@@ -37,6 +37,10 @@ struct Settings: Codable {
     /// 位置合わせでは埋まらない差だと判断し、既定を元の「別窓で開く」に戻した。
     /// 本命は Helium のフォーク(第2段)。重ね窓を試したい人だけ true にする
     var dockChromiumWindow = false
+    /// Chromium(Helium)のタブを Idaten のタブバーにも並べる。**既定 true**。
+    /// 重ね窓(dockChromiumWindow)とは別物: 窓は重ねず、タブの一覧・URLバー・⌘1〜⌘9・履歴の記録だけを共有する。
+    /// これが false だと Chromium 側の閲覧は Idaten から完全に見えない(履歴も補完も育たない)
+    var mirrorChromiumTabs = true
     /// ツールバーの下にブックマークバーを出す(⇧⌘B で切り替え)
     var bookmarkBarVisible = false
     /// ページ内容から「Chrome拡張が要りそうか」をAppleの端末内モデルで判定し、Chromiumへの切替を提案する。
@@ -65,6 +69,11 @@ struct Settings: Codable {
         userAgentSuffix = try c.decodeIfPresent(String.self, forKey: .userAgentSuffix) ?? d.userAgentSuffix
         adBlockEnabled = try c.decodeIfPresent(Bool.self, forKey: .adBlockEnabled) ?? d.adBlockEnabled
         aiEngineSuggestEnabled = try c.decodeIfPresent(Bool.self, forKey: .aiEngineSuggestEnabled) ?? d.aiEngineSuggestEnabled
+        // 後から足した項目をここに書き忘れると、書き込まれるのに読み戻されない(= 設定画面で変えても
+        // 次の起動で必ず既定に戻る)。dockChromiumWindow と bookmarkBarVisible が実際にそうなっていた(2026-09-23)
+        dockChromiumWindow = try c.decodeIfPresent(Bool.self, forKey: .dockChromiumWindow) ?? d.dockChromiumWindow
+        bookmarkBarVisible = try c.decodeIfPresent(Bool.self, forKey: .bookmarkBarVisible) ?? d.bookmarkBarVisible
+        mirrorChromiumTabs = try c.decodeIfPresent(Bool.self, forKey: .mirrorChromiumTabs) ?? d.mirrorChromiumTabs
     }
 
     static func load() -> Settings {
