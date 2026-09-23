@@ -83,20 +83,22 @@ run_chrome_ext() {   # $1 組番号
   local prof="$OUT_DIR/chromeext-profile-$1"
   rm -rf "$prof"; mkdir -p "$prof"
   write_memory_saver_prefs "$prof" 2
-  if ! node "$ROOT/tools/bench/prepare_chrome_ext.mjs" "$prof" "$ROOT/extension" > "$OUT_DIR/chromeext-prep-$1.json" 2>&1; then
-    echo "拡張を入れられなかった(組 $1) — この条件は中止" | tee -a "$OUT_DIR/errors.txt"; return 1
-  fi
-  if ! grep -q '"enabled":true' "$OUT_DIR/chromeext-prep-$1.json"; then
-    echo "拡張が有効にならなかった(組 $1) — この条件は中止" | tee -a "$OUT_DIR/errors.txt"; return 1
-  fi
-  sleep 3
-  open -g -n -a "Google Chrome" --args --user-data-dir="$prof" --no-first-run --no-default-browser-check "${URLS[@]}" "$VIDEO_URL"
+  # Extensions.loadUnpacked で入れた拡張は**その起動の間しか残らない**(実測 2026-09-23:
+  # 準備してから開き直すと拡張のターゲットが消えていた)。同じプロセスの中で「入れる→開く→測り終わるまで生かす」
+  node "$ROOT/tools/bench/run_chrome_ext.mjs" "$prof" "$ROOT/extension" "$((LOAD_WAIT + DURATION + 30))" \
+    "${URLS[@]}" "$VIDEO_URL" > "$OUT_DIR/chromeext-run-$1.json" 2>&1 &
+  local runner=$!
   sleep "$LOAD_WAIT"
+  if ! grep -q '"workerAlive":true' "$OUT_DIR/chromeext-run-$1.json"; then
+    echo "拡張が動いていない(組 $1) — この条件は中止" | tee -a "$OUT_DIR/errors.txt"
+    kill "$runner" || true
+    return 1
+  fi
   local pid
-  pid=$(pgrep -f "user-data-dir=$prof" | head -1)
+  pid=$(python3 -c "import json,sys; print(json.loads(open('$OUT_DIR/chromeext-run-$1.json').read().splitlines()[0])['pid'])")
   if [ -z "$pid" ]; then echo "chrome_ext pid なし(組 $1)" | tee -a "$OUT_DIR/errors.txt"; return 1; fi
   sample_and_summarize "$pid" "chromeext-$1"
-  kill "$pid" || true
+  wait "$runner" || true      # 起動器が自分で閉じる(最後に残ったページ数を記録する)
   sleep 8
 }
 
