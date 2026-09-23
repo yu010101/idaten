@@ -6,3 +6,9 @@ engines/
 build.log
 *.log
 tools/adblock-convert/target/
+
+# 比較計測の作業物(プロファイル・動画の実体)はリポジトリに入れない。集計結果と条件だけ残す
+measurements/bench*/chrome-profile-*/
+measurements/bench*/chromeext-profile-*/
+measurements/bench*/idaten-*/
+tools/bench/video/sample.mp4

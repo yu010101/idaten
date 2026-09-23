@@ -97,7 +97,15 @@ enum ProfileStore {
 struct ProfilePaths {
     let profile: Profile
 
+    /// 比較計測のときだけ、プロファイルの置き場所ごと差し替える(--bench-isolated)。
+    /// Chrome 側が新品プロファイルなのに Idaten 側が本人の温かいデータを使っていると、条件が揃わない
+    static var directoryOverride: URL?
+
     var dir: URL {
+        if let override = Self.directoryOverride {
+            try? FileManager.default.createDirectory(at: override, withIntermediateDirectories: true)
+            return override
+        }
         let d = Paths.support.appendingPathComponent("Profiles/\(profile.id)", isDirectory: true)
         try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
         return d

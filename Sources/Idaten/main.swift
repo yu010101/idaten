@@ -46,6 +46,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         if args.contains("--no-adblock") { browser.settings.adBlockEnabled = false }   // この起動だけ。設定ファイルは書き換えない
         // --selftest-panels <dir>: 設定・履歴の画面を描き出して見た目を確かめる(画面収録の権限が無くても見られる)
+        // --bench-isolated <dir>: 比較計測用。プロファイルの置き場所・Cookie・履歴・セッションを
+        // すべてその dir の下に作る(Chrome の新品プロファイルと条件を揃えるため)。
+        // 本人のデータには一切触らない
+        if let i = args.firstIndex(of: "--bench-isolated"), args.indices.contains(i + 1) {
+            let dir = URL(fileURLWithPath: args[i + 1], isDirectory: true)
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            ProfilePaths.directoryOverride = dir
+            let isolated = BrowserWindowController(profile: Profile.makeNew(name: "bench", colorHex: "#888888"))
+            isolated.settings.adBlockEnabled = browser.settings.adBlockEnabled
+            windows["bench"] = isolated
+            isolated.start(openURLs: argURLs)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+
         // --bench <dir>: 比較計測用。利用者のセッション・履歴・ブックマークは読み書きせず、渡したURLを開いたまま待つ
         if let i = args.firstIndex(of: "--bench"), args.indices.contains(i + 1) {
             browser.selfTestDir = URL(fileURLWithPath: args[i + 1], isDirectory: true)
