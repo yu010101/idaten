@@ -61,9 +61,22 @@ struct CookieShare {
     }
 
     /// そのホストの今ある Cookie を「名前で」登録する。値は保存しない(名前とドメインだけ)
+    /// そのホストに**本当に属する** Cookie だけを登録する。
+    /// 以前は `domain.contains(host)` で見ていたので、`example.com` を許可すると
+    /// `example.com.attacker.test` の Cookie まで登録されてしまっていた(Codexレビュー3 #5)
+    static func belongs(cookieDomain: String, host: String) -> Bool {
+        let h = host.lowercased()
+        let d = cookieDomain.lowercased()
+        if d.hasPrefix(".") {
+            let bare = String(d.dropFirst())
+            return h == bare || h.hasSuffix("." + bare)
+        }
+        return h == d
+    }
+
     mutating func allow(host: String, cookies: [HTTPCookie]) {
         guard !Self.isExcluded(host: host) else { return }
-        for c in cookies where c.domain.contains(host) || host.hasSuffix(c.domain.hasPrefix(".") ? String(c.domain.dropFirst()) : c.domain) {
+        for c in cookies where Self.belongs(cookieDomain: c.domain, host: host) {
             let rule = c.domain.hasPrefix(".")
                 ? Rule(host: nil, domain: c.domain, name: c.name, path: c.path)
                 : Rule(host: c.domain, domain: nil, name: c.name, path: c.path)
@@ -90,9 +103,14 @@ struct CookieShare {
     /// CDP の `Storage.setCookies` に渡す形へ変換する。変換できないものは黙って捨てず nil を返す
     static func toCDP(_ cookie: HTTPCookie) -> [String: Any]? {
         guard !cookie.name.isEmpty else { return nil }
-        // __Host- は domain 属性を持てない。先頭ドット付きで渡すと保存が拒否される
-        if cookie.name.hasPrefix("__Host-") && (cookie.domain.hasPrefix(".") || cookie.path != "/") { return nil }
+        // __Host- は Secure 必須・path は "/" 厳密一致・domain 属性を持てない
+        if cookie.name.hasPrefix("__Host-") && (cookie.domain.hasPrefix(".") || cookie.path != "/" || !cookie.isSecure) { return nil }
         if cookie.name.hasPrefix("__Secure-") && !cookie.isSecure { return nil }
+        // 期限切れは持っていかない。省略すると「セッション Cookie」に化けてしまう(Codexレビュー3 #11)
+        if let expires = cookie.expiresDate, !cookie.isSessionOnly, expires <= Date() { return nil }
+        // 明示的に SameSite=None の Cookie は持っていかない。省略すると Lax 相当になり、
+        // クロスサイトで送られなくなってログインが壊れる。転記すると防御を緩める。どちらも危ないので送らない
+        if cookie.sameSitePolicy?.rawValue.lowercased() == "none" { return nil }
         var param: [String: Any] = [
             "name": cookie.name,
             "value": cookie.value,

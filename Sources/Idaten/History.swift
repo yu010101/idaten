@@ -12,6 +12,7 @@ final class History {
         sqlite3_exec(db, """
             CREATE TABLE IF NOT EXISTS visits(id INTEGER PRIMARY KEY, url TEXT NOT NULL, title TEXT, ts REAL NOT NULL);
             CREATE INDEX IF NOT EXISTS visits_ts ON visits(ts);
+            CREATE UNIQUE INDEX IF NOT EXISTS visits_url_ts ON visits(url, ts);
             """, nil, nil, nil)
     }
 
@@ -20,7 +21,7 @@ final class History {
     func record(url: URL, title: String?) {
         guard let db, url.scheme == "http" || url.scheme == "https" else { return }
         var st: OpaquePointer?
-        guard sqlite3_prepare_v2(db, "INSERT INTO visits(url,title,ts) VALUES(?,?,?)", -1, &st, nil) == SQLITE_OK else { return }
+        guard sqlite3_prepare_v2(db, "INSERT OR IGNORE INTO visits(url,title,ts) VALUES(?,?,?)", -1, &st, nil) == SQLITE_OK else { return }
         defer { sqlite3_finalize(st) }
         sqlite3_bind_text(st, 1, url.absoluteString, -1, SQLITE_TRANSIENT)
         sqlite3_bind_text(st, 2, title ?? "", -1, SQLITE_TRANSIENT)

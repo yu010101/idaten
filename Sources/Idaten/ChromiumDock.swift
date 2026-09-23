@@ -312,7 +312,9 @@ final class ChromiumDock {
             let pageURL = infos.first { $0["targetId"] as? String == pageId }?["url"] as? String
             // tab と page は別のターゲットだが URL で対応づけられる(同じタブの表と裏)
             let tab = infos.first { $0["type"] as? String == "tab" && ($0["url"] as? String) == pageURL }
-            done(tab?["targetId"] as? String ?? (infos.first { $0["type"] as? String == "tab" }?["targetId"] as? String))
+            // 対応するタブを一意に決められないときは送らない(別のタブで拡張が動いてしまうため。Codexレビュー3)
+            let candidates = infos.filter { $0["type"] as? String == "tab" && ($0["url"] as? String) == pageURL }
+            done(candidates.count == 1 ? candidates[0]["targetId"] as? String : nil)
         }
     }
 
@@ -320,9 +322,16 @@ final class ChromiumDock {
     /// Claude なら サイドパネルが開き、1Password なら入力候補の窓が出る
     func triggerExtension(_ extensionId: String, onPage pageId: String, _ done: @escaping (String?) -> Void) {
         guard let cdp else { done("Chromium に繋がっていません"); return }
-        tabTargetId(forPage: pageId) { tabId in
-            guard let tabId else { done("対象のタブが見つかりません"); return }
-            cdp.send("Extensions.triggerAction", ["id": extensionId, "targetId": tabId]) { _, err in done(err) }
+        // ディスクに manifest があることは「いま動いている」証拠にならない(無効化された拡張でもファイルは残る)。
+        // 無効な ID を渡すとブラウザが落ちうる実装なので、**生きている拡張だけ**に送る(Codexレビュー3 #2)
+        cdp.send("Target.getTargets", ["filter": [[:]]]) { r, _ in
+            let infos = (r?["targetInfos"] as? [[String: Any]]) ?? []
+            let alive = infos.contains { ($0["url"] as? String)?.hasPrefix("chrome-extension://\(extensionId)/") == true }
+            guard alive else { done("その拡張はいま動いていません(無効化されているか、まだ起きていません)"); return }
+            self.tabTargetId(forPage: pageId) { tabId in
+                guard let tabId else { done("対象のタブが見つかりません"); return }
+                cdp.send("Extensions.triggerAction", ["id": extensionId, "targetId": tabId]) { _, err in done(err) }
+            }
         }
     }
 

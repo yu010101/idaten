@@ -1113,19 +1113,23 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
 
     /// 指定があるサイトなら、ページを作る**前**に Cookie を入れる。
     /// 逆順だと、ログアウトした状態のページが読み込まれてから Cookie が入るので「効かなかった」ように見える
-    private func carryCookiesIfAllowed(for url: URL, _ done: @escaping () -> Void) {
+    private func carryCookiesIfAllowed(for url: URL, cancelled: @escaping () -> Bool, _ done: @escaping () -> Void) {
         guard let host = url.host, !CookieShare.isExcluded(host: host) else { done(); return }
         let wanted = cookieShare.matches(host: host)
         guard !wanted.isEmpty else { done(); return }
         dataStore.httpCookieStore.getAllCookies { [weak self] all in
-            guard let self else { done(); return }
+            guard let self, !cancelled() else { done(); return }   // 取り消されていたら Cookie を入れない
             let params = all.filter { c in
                 wanted.contains { rule in
-                    rule.name == c.name && (rule.host?.lowercased() == c.domain.lowercased()
-                                            || rule.domain?.lowercased() == c.domain.lowercased())
+                    // 名前・ドメイン・パスの3つが一致したものだけ(以前は path を見ていなかった)
+                    rule.name == c.name
+                        && (rule.host?.lowercased() == c.domain.lowercased()
+                            || rule.domain?.lowercased() == c.domain.lowercased())
+                        && (rule.path == nil || rule.path == c.path)
                 }
             }.compactMap(CookieShare.toCDP)
             guard !params.isEmpty else { done(); return }
+            guard !cancelled() else { done(); return }
             self.dock.setCookiesOneByOne(params) { [weak self] sent, failed in
                 // 「送れた」は「入った」ではない(拒否されても成功が返る)。名前・ドメイン・パスだけで読み返す
                 self?.dock.cookieKeys { keys in
@@ -1134,10 +1138,14 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
                         let domain = (p["domain"] as? String ?? "")
                         let path = p["path"] as? String ?? "/"
                         // Chromium 側は先頭ドットを落として保持することがあるので、両方で照合する
+                        // ドメインは厳密に照合する(先頭ドットの有無を同一視すると host-only と取り違える)
                         return keys.contains("\(name)|\(domain)|\(path)")
-                            || keys.contains("\(name)|\(domain.hasPrefix(".") ? String(domain.dropFirst()) : "." + domain)|\(path)")
                     }.count
                     NSLog("Idaten: ログインの持ち込み 送信%d 失敗%d 入った%d(値は記録しない)", sent, failed, landed)
+                    if landed < params.count {
+                        // 入らなかったものがある。利用者には「持っていけなかった」とだけ伝える(値は出さない)
+                        self?.memoryLabel.toolTip = "ログイン情報の一部を Chromium へ持ち込めませんでした"
+                    }
                     done()
                 }
             }
@@ -1151,7 +1159,7 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         let token = UUID()
         tab.pendingCreate = token
         tab.urlAtCreate = url
-        carryCookiesIfAllowed(for: url) { [weak self, weak tab] in
+        carryCookiesIfAllowed(for: url, cancelled: { [weak tab] in tab?.pendingCreate != token }) { [weak self, weak tab] in
             guard let self, let tab, tab.pendingCreate == token else { return }
             self.createChromiumTarget(tab, url: url, token: token)
         }
@@ -1189,8 +1197,14 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
             }
             tab.urlAtCreate = nil
             if tab === self.selected {
-                self.dockedTargetId = id
-                self.dock.show(id, at: self.dockRect(), stillWanted: { [weak self, weak tab] in tab != nil && self?.selected === tab })
+                // 窓を重ねるのは設定が ON のときだけ。以前はここに設定の確認が無く、
+                // 既定(重ねない)でも作成完了時に重なってしまっていた(Codexレビュー3 #1)
+                if self.settings.dockChromiumWindow {
+                    self.dockedTargetId = id
+                    self.dock.show(id, at: self.dockRect(), stillWanted: { [weak self, weak tab] in tab != nil && self?.selected === tab })
+                } else {
+                    self.dock.activateInHelium(id)
+                }
             }
         }
     }
@@ -1277,15 +1291,26 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
 
     /// Chromium 側で溜まったブックマークと履歴を取り込む(読むだけ・片方向)。
     /// 重複は BookmarkStore が弾くので、何度呼んでも増えない
+    private var importInFlight = false
     func importFromManagedChromium() {
         guard selfTestDir == nil || sessionPathOverride != nil else { return }   // 自己検査では触らない
+        guard !importInFlight else { return }     // 取り込みを重ねて走らせない(Codexレビュー3 #3)
+        importInFlight = true
+        let profileDir = paths.chromiumProfile
+        let historyPath = paths.history
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            guard let self else { return }
-            let r = ChromeImport.importFromManagedChromium(profileDir: self.paths.chromiumProfile,
-                                                           into: self.paths.history, bookmarks: self.bookmarks)
-            guard r.bookmarks > 0 || r.history > 0 else { return }
-            NSLog("Idaten: Chromium から取り込み ブックマーク%d件 履歴%d件", r.bookmarks, r.history)
+            // 読むのは背景で。**共有のブックマークへ書くのはメインスレッドだけ**にする
+            // (以前は背景スレッドから直接 add していたので、⌘D と重なるとデータが壊れうる)
+            let marks = ChromeImport.readManagedChromiumBookmarks(profileDir: profileDir)
+            let visits = ChromeImport.importManagedChromiumHistory(profileDir: profileDir, into: historyPath)
             DispatchQueue.main.async {
+                guard let self else { return }
+                defer { self.importInFlight = false }
+                let before = self.bookmarks.items.count
+                for m in marks { self.bookmarks.add(title: m.title, url: m.url, folder: m.folder) }
+                let added = self.bookmarks.items.count - before
+                guard added > 0 || visits > 0 else { return }
+                NSLog("Idaten: Chromium から取り込み ブックマーク%d件 履歴%d件", added, visits)
                 self.rebuildBookmarkBar()
                 self.onBookmarksChanged?()
             }
@@ -1307,6 +1332,7 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
     }
 
     private func followWindow() {
+        guard settings.dockChromiumWindow else { return }
         if selected?.isChromium == true { root.layoutSubtreeIfNeeded(); root.hole = container.frame }
         guard let id = dockedTargetId else { return }
         dock.place(id, at: dockRect())
@@ -1316,6 +1342,7 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
     /// Chromium タブを見ている間に Idaten が前面へ来たら、Helium を上げ直してから自分を戻し、2枚を隣り合わせに保つ
     private var lastRaise = Date.distantPast
     func windowDidBecomeKey(_ notification: Notification) {
+        guard settings.dockChromiumWindow else { return }   // 重ねないときは前面化の面倒を見ない
         guard selected?.isChromium == true, let pid = dock.pid,
               let helium = NSRunningApplication(processIdentifier: pid),
               Date().timeIntervalSince(lastRaise) > 1 else { return }   // 自分を戻すと再び呼ばれるので間隔で止める
@@ -1333,6 +1360,7 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
     func windowDidEndLiveResize(_ notification: Notification) { followWindow() }
     func windowDidMiniaturize(_ notification: Notification) { if let id = dockedTargetId { dock.minimize(id) } }
     func windowDidDeminiaturize(_ notification: Notification) {
+        guard settings.dockChromiumWindow else { return }
         if let t = selected, t.isChromium, let id = t.chromiumTargetId {
             dock.show(id, at: dockRect(), stillWanted: { [weak self, weak t] in t != nil && self?.selected === t })
         } else { followWindow() }

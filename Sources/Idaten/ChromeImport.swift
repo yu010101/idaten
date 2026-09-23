@@ -76,6 +76,9 @@ enum ChromeImport {
         guard sqlite3_open(historyPath.path, &dstDB) == SQLITE_OK else { return 0 }
         defer { sqlite3_close(dstDB) }
         sqlite3_exec(dstDB, "CREATE TABLE IF NOT EXISTS visits(id INTEGER PRIMARY KEY, url TEXT NOT NULL, title TEXT, ts REAL NOT NULL);", nil, nil, nil)
+        // 同じ訪問(同じURL・同じ時刻)を二重に入れない。以前は取り込みのたびに全件 INSERT していたので、
+        // 起動のたびに履歴が二重・三重に増えていた(Codexレビュー3 #4)
+        sqlite3_exec(dstDB, "CREATE UNIQUE INDEX IF NOT EXISTS visits_url_ts ON visits(url, ts);", nil, nil, nil)
 
         var stmt: OpaquePointer?
         // visit_count を回数として展開せず、代表1件+回数を反映した重み(URLバー補完のCOUNT(*)集計と相性が良い)にする
@@ -83,7 +86,7 @@ enum ChromeImport {
         defer { sqlite3_finalize(stmt) }
 
         var insert: OpaquePointer?
-        sqlite3_prepare_v2(dstDB, "INSERT INTO visits(url,title,ts) VALUES(?,?,?)", -1, &insert, nil)
+        sqlite3_prepare_v2(dstDB, "INSERT OR IGNORE INTO visits(url,title,ts) VALUES(?,?,?)", -1, &insert, nil)
         defer { sqlite3_finalize(insert) }
 
         var imported = 0
@@ -150,17 +153,17 @@ extension ChromeImport {
     ///
     /// なぜ要るか: 拡張が要る作業を Chromium でしている間、Idaten 側の履歴もブックマークも育たない。
     /// 実測(2026-09-23)で Idaten 34件 / Helium 1,218件、ブックマークは 0件 / 842件だった。
-    @discardableResult
-    static func importFromManagedChromium(profileDir chromiumProfile: URL,
-                                          into historyPath: URL,
-                                          bookmarks: BookmarkStore) -> (bookmarks: Int, history: Int) {
+    /// Idaten が渡した先(Helium)のブックマークを**読むだけ**。書き込みは呼び出し側がメインスレッドで行う
+    static func readManagedChromiumBookmarks(profileDir chromiumProfile: URL) -> [(title: String, url: String, folder: String)] {
         let root = chromiumProfile.deletingLastPathComponent()
-        let dirName = chromiumProfile.lastPathComponent
-        let marks = readBookmarks(profileDir: dirName + "/Default", root: root)
-        let before = bookmarks.items.count
-        for m in marks { bookmarks.add(title: m.title, url: m.url, folder: m.folder) }
-        let added = bookmarks.items.count - before
-        let visits = importHistory(profileDir: dirName + "/Default", into: historyPath, root: root)
-        return (added, visits)
+        return readBookmarks(profileDir: chromiumProfile.lastPathComponent + "/Default", root: root)
+    }
+
+    /// Idaten が渡した先(Helium)の履歴を取り込む。**同じ訪問は何度取り込んでも増えない**
+    /// (以前は毎回すべて INSERT していたので、起動のたびに履歴が二重・三重になった。Codexレビュー3 #4)
+    @discardableResult
+    static func importManagedChromiumHistory(profileDir chromiumProfile: URL, into historyPath: URL) -> Int {
+        let root = chromiumProfile.deletingLastPathComponent()
+        return importHistory(profileDir: chromiumProfile.lastPathComponent + "/Default", into: historyPath, root: root)
     }
 }
