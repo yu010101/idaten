@@ -23,6 +23,11 @@ final class Tab: NSObject {
     var urlAtCreate: URL?
     /// ⌘⇧E で WebKit へ戻したタブ。ドメイン例外やプロファイル既定が Chromium でも、このタブは WebKit のまま
     var forceWebKit = false
+    /// Chromium へ渡すときに持っていくスクロール位置(渡した先で先頭に戻らないように)
+    var scrollToRestoreInChromium = 0.0
+    /// Chromium へ渡した時点の URL。戻すときに「同じページのままか」を見て、
+    /// 同じなら WebKit 側の状態(戻る/進むの履歴)ごと復帰させる
+    var urlWhenHandedOff: String?
     /// 重ね窓を使わない既定の経路で、別窓の Chromium へ渡したタブ(印だけ残す)
     var handedOffExternally = false
     /// タブに出すファビコン(ホスト単位で使い回す)

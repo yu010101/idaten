@@ -907,10 +907,17 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         case .success:
             let t = tab ?? newTab(url: url, select: false, hibernated: true)
             // 失敗したら WebKit へ戻せるよう、戻る/進むの履歴は捨てずに退避しておく(Codexレビュー #7)
-            if let wv = t.webView { t.interactionState = wv.interactionState }
+            if let wv = t.webView {
+                t.interactionState = wv.interactionState
+                // 「どこを読んでいたか」も持っていく。渡した先で先頭に戻るのが一番よく効く不満だった
+                wv.evaluateJavaScript("window.scrollY") { [weak t] y, _ in
+                    t?.scrollToRestoreInChromium = (y as? NSNumber)?.doubleValue ?? 0
+                }
+            }
             t.dropWebView()
             t.isChromium = true
             t.chromiumTargetId = nil
+            t.urlWhenHandedOff = url.absoluteString
             t.url = url
             if (tab == nil && activate) || (tab != nil && tab === selected) { select(t) } else { requestChromiumTarget(t); rebuildTabBar() }
             saveSession()
@@ -1106,6 +1113,14 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
             tab.chromiumTargetId = id
             // 応答待ちの間に URL バーで別の URL を入れていたら、そちらへ移動し直す(Codexレビュー #10)
             if let now = tab.url, now != tab.urlAtCreate { self.dock.navigate(id, to: now) }
+            // 渡す前に見ていた位置まで送る。読み込みが終わる前に送っても効かないので少し待つ
+            if tab.scrollToRestoreInChromium > 50 {
+                let y = tab.scrollToRestoreInChromium
+                tab.scrollToRestoreInChromium = 0
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+                    self?.dock.evaluate(id, "window.scrollTo(0, \(Int(y))); Math.round(window.scrollY)") { _ in }
+                }
+            }
             tab.urlAtCreate = nil
             if tab === self.selected {
                 self.dockedTargetId = id
@@ -1116,6 +1131,18 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
 
     /// ⌘⇧E を Chromium タブで押したとき: WebKit へ戻す
     private func moveBackToWebKit(_ tab: Tab) {
+        // Chromium 側で読んでいた位置を持って帰る(閉じる前に聞く)
+        if let id = tab.chromiumTargetId {
+            dock.evaluate(id, "({y: Math.round(window.scrollY), url: location.href})") { [weak self, weak tab] v in
+                guard let self, let tab, let info = v as? [String: Any] else { return }
+                if let urlString = info["url"] as? String, let url = URL(string: urlString) { tab.url = url }
+                tab.savedScrollY = (info["y"] as? NSNumber)?.doubleValue ?? 0
+                if tab === self.selected, let wv = tab.webView, tab.savedScrollY > 50 {
+                    wv.evaluateJavaScript("window.scrollTo(0, \(Int(tab.savedScrollY)))", completionHandler: nil)
+                    tab.savedScrollY = 0
+                }
+            }
+        }
         if let id = tab.chromiumTargetId { dock.closeTarget(id) }
         if dockedTargetId == tab.chromiumTargetId { dockedTargetId = nil }
         tab.chromiumTargetId = nil
@@ -1124,7 +1151,9 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         // ドメイン例外(親ドメイン指定も)やプロファイル既定が Chromium でも、このタブは WebKit のままにする。
         // 完全一致の例外だけ消しても、読み込んだ瞬間にまた Chromium へ戻される(Codexレビュー #9)
         tab.forceWebKit = true
-        tab.interactionState = nil   // Chromium へ移す前の WebKit の状態が残っていると、今の URL でなく古いページが戻る
+        // 以前はここで interactionState を捨てていたので、往復すると戻る/進むの履歴が消えていた。
+        // 渡す前と同じ URL のままなら状態ごと戻す(位置も履歴も保つ)。別のページへ移っていたら捨てて読み直す
+        if tab.url?.absoluteString != tab.urlWhenHandedOff { tab.interactionState = nil }
         select(tab)
         saveSession()
     }
@@ -1531,6 +1560,47 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
     /// --selftest-dock <dir>: 「1ブラウザ」第1段の機械検査。画面収録の権限なしで、CDP が返す Helium の窓の位置と
     /// Idaten の内容領域を突き合わせる。①Chromiumで開く ②窓を動かして追従 ③WebKitタブへ切替→戻す ④結果を dock.json へ
     var selfTestDock = false
+
+    /// --selftest-scroll <dir> <url>: 受け渡しでスクロール位置が引き継がれるかを測る
+    func runScrollSelfTest(url: URL, dir: URL) {
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        var report: [String: Any] = ["expected": 1500]
+        selfTestDir = nil
+        let wait = { (s: Double, f: @escaping () -> Void) in DispatchQueue.main.asyncAfter(deadline: .now() + s, execute: f) }
+        func finish() {
+            if let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) {
+                try? data.write(to: dir.appendingPathComponent("scroll.json"))
+            }
+            dock.shutdown()
+            wait(2) { NSApp.terminate(nil) }
+        }
+        newTab(url: url)
+        wait(8) { [self] in
+            guard let wv = selected?.webView else { report["error"] = "WebView が無い"; finish(); return }
+            wv.evaluateJavaScript("window.scrollTo(0, 1500); Math.round(window.scrollY)") { [self] y, _ in
+                report["webkitScrollBefore"] = (y as? NSNumber)?.doubleValue ?? -1
+                wait(1) { [self] in
+                    handOff(url, in: selected)         // ⌘⇧E 相当
+                    wait(12) { [self] in
+                        guard let id = selected?.chromiumTargetId else { report["error"] = "Chromium タブが作られない"; finish(); return }
+                        dock.evaluate(id, "Math.round(window.scrollY)") { [self] v in
+                            report["chromiumScrollAfter"] = (v as? NSNumber)?.doubleValue ?? -1
+                            report["canGoBackBeforeReturn"] = selected?.webView?.canGoBack ?? false
+                            // 戻す(⌘⇧E をもう一度)
+                            wait(1) { [self] in
+                                switchEngine()
+                                wait(6) { [self] in
+                                    report["backToWebKit"] = selected?.isChromium == false
+                                    report["interactionStateKept"] = selected?.interactionState != nil || (selected?.webView?.canGoBack ?? false)
+                                    finish()
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     /// --selftest-handoff <dir> <url>: Chromium タブの取り込みと拡張の起動を確かめる
     func runHandoffSelfTest(url: URL, dir: URL) {

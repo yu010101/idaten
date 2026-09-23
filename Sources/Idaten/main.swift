@@ -46,6 +46,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         if args.contains("--no-adblock") { browser.settings.adBlockEnabled = false }   // この起動だけ。設定ファイルは書き換えない
         // --selftest-panels <dir>: 設定・履歴の画面を描き出して見た目を確かめる(画面収録の権限が無くても見られる)
+        // --selftest-scroll <dir> <url>: 受け渡しでスクロール位置が引き継がれるか
+        if let i = args.firstIndex(of: "--selftest-scroll"), args.indices.contains(i + 1) {
+            let dir = URL(fileURLWithPath: args[i + 1], isDirectory: true)
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            ProfilePaths.directoryOverride = dir
+            let isolated = BrowserWindowController(profile: Profile.makeNew(name: "scroll", colorHex: "#888888"))
+            windows["scroll"] = isolated
+            isolated.selfTestDir = dir
+            isolated.start(openURLs: [])
+            if let url = argURLs.first { isolated.runScrollSelfTest(url: url, dir: dir) }
+            return
+        }
+
         // --selftest-handoff <dir> <url>: Chromium タブの取り込みと拡張の起動を確かめる。
         // プロファイルの置き場所を差し替えるので、利用者のデータには触らない
         if let i = args.firstIndex(of: "--selftest-handoff"), args.indices.contains(i + 1) {
