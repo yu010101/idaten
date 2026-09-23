@@ -1,0 +1,7 @@
+2026/09/23-12:06:02.831 d57716 Creating DB /Users/yu01/idaten-browser/measurements/bench-20260923-120558/chrome-profile-1/Default/IndexedDB/https_natalie.mu_0.indexeddb.leveldb since it was missing.
+2026/09/23-12:06:02.835 d57716 Reusing MANIFEST /Users/yu01/idaten-browser/measurements/bench-20260923-120558/chrome-profile-1/Default/IndexedDB/https_natalie.mu_0.indexeddb.leveldb/MANIFEST-000001
+2026/09/23-12:06:02.847 d5771a Level-0 table #5: started
+2026/09/23-12:06:02.849 d5771a Level-0 table #5: 1220 bytes OK
+2026/09/23-12:06:02.850 d5771a Delete type=0 #3
+2026/09/23-12:06:02.850 d57716 Manual compaction at level-0 from '\x00\x01\x00\x00\x00' @ 72057594037927935 : 1 .. '\x00\x02\x00\x00\x00' @ 0 : 0; will stop at (end)
+2026/09/23-12:06:02.860 d5771a Manual compaction at level-0 from '\x00\x03\x00\x00\x00' @ 72057594037927935 : 1 .. '\x00\x04\x00\x00\x00' @ 0 : 0; will stop at (end)

@@ -93,6 +93,7 @@ func family(of root: pid_t) -> [pid_t] {
     return members.sorted()
 }
 
+// 1,048,576 で割るので単位は MiB。MB(10^6)ではない
 func mb(_ b: UInt64) -> String { String(format: "%.1f", Double(b) / 1_048_576.0) }
 
 func percentile(_ xs: [UInt64], _ q: Double) -> UInt64 {
@@ -131,10 +132,10 @@ guard rootPid > 0, kill(rootPid, 0) == 0 || errno == EPERM else {
 if once {
     let samples = family(of: rootPid).compactMap(sample)
     for s in samples.sorted(by: { $0.footprint > $1.footprint }) {
-        print("\(s.pid)\t\(mb(s.footprint)) MB\t\(s.name)")
+        print("\(s.pid)\t\(mb(s.footprint)) MiB\t\(s.name)")
     }
     let total = samples.reduce(UInt64(0)) { $0 + $1.footprint }
-    print("TOTAL\t\(mb(total)) MB\tprocs=\(samples.count)")
+    print("TOTAL\t\(mb(total)) MiB\tprocs=\(samples.count)")
     exit(0)
 }
 

@@ -119,6 +119,8 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
     private var ruleLists: [WKContentRuleList] = []
 
     private let tabStack = NSStackView()
+    private let memoryLabel = NSTextField(labelWithString: "")
+    private var memoryTimer: Timer?
     private let bookmarkBar = NSStackView()
     private let bookmarkScroll = NSScrollView()
     private let tabScroll = NSScrollView()
@@ -223,7 +225,13 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         profileDot.toolTip = "プロファイル: \(profile.name)(押すと切り替え)"
         profileDot.setContentHuggingPriority(.required, for: .horizontal)
 
-        let toolbar = NSStackView(views: [profileDot, backButton, forwardButton, reloadButton, urlField, bookmarkButton, engineButton, newTabButton])
+        memoryLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        memoryLabel.textColor = .secondaryLabelColor
+        memoryLabel.alignment = .right
+        memoryLabel.setContentHuggingPriority(.required, for: .horizontal)
+        memoryLabel.toolTip = "Idaten と、その管理下の WebKit・Chromium のプロセスを合算した現在のメモリ(圧縮・スワップ込み)"
+
+        let toolbar = NSStackView(views: [profileDot, backButton, forwardButton, reloadButton, urlField, memoryLabel, bookmarkButton, engineButton, newTabButton])
         toolbar.orientation = .horizontal
         toolbar.spacing = 8
         toolbar.edgeInsets = NSEdgeInsets(top: 0, left: 10, bottom: 0, right: 10)
@@ -284,6 +292,37 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         ])
     }
 
+    /// いま使っているメモリとタブの状態を出す。推定や他ブラウザとの比較は出さない —
+    /// 測れるのは自分の分だけで、「Chromeなら○GB」は対照条件なしには言えないため(Codex指摘 2026-09-23)
+    private var lastFootprint: Footprint.Result?
+
+    /// 測るのは5秒ごと(少し重い)。タブの内訳は数えるだけなので、タブが変わったらその場で書き直す
+    private func updateMemoryLabel() {
+        let roots = [ProcessInfo.processInfo.processIdentifier] + (dock.pid.map { [$0] } ?? [])
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let r = Footprint.measure(roots: roots)
+            DispatchQueue.main.async {
+                self?.lastFootprint = r
+                self?.refreshMemoryLabel()
+            }
+        }
+    }
+
+    private func refreshMemoryLabel() {
+        let awake = tabs.filter { $0.webView != nil }.count
+        let asleep = tabs.filter { $0.isHibernated }.count
+        let handed = tabs.filter { $0.isChromium || $0.handedOffExternally }.count
+        var text = ""
+        if let r = lastFootprint {
+            text = String(format: "%.0f MiB · %d プロセス · ", r.mib, r.processes)
+            if r.missed > 0 { text += "(一部未取得 \(r.missed)) " }
+        }
+        text += "起動中 \(awake)"
+        if asleep > 0 { text += " / 休眠 \(asleep)" }
+        if handed > 0 { text += " / Chromium \(handed)" }
+        memoryLabel.stringValue = text
+    }
+
     /// 広告遮断のルールを読み終えてからタブを開く(最初のページが素通しにならないように)
     func start(openURLs: [URL]) {
         let begin: () -> Void = { [self] in
@@ -299,6 +338,8 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
             window.makeKeyAndOrderFront(nil)
             if selected?.url == nil || selected?.url?.absoluteString == "about:blank" { focusURLField() }
             scheduleHibernation()
+            updateMemoryLabel()
+            memoryTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in self?.updateMemoryLabel() }
         }
         guard settings.adBlockEnabled else { begin(); return }
         AdBlock.load { [self] lists, errors in
@@ -414,6 +455,7 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
             if tab.isHibernated { cell.toolTip = "休眠中 — 選ぶと読み直します" }
             tabStack.addArrangedSubview(cell)
         }
+        refreshMemoryLabel()
     }
 
     /// 「%E9%9F%8B…」のままだと読めないので、表示は復号して https:// と末尾の / を落とす。
@@ -764,15 +806,19 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
             finished = true
             guard let self, let tab, tab.webView === wv else { return }
             tab.hibernationCheckInFlight = false
+            // 判定の返事を待つ間にそのタブが選ばれているかもしれない。確定の直前に見直す
+            if tab === self.selected { tab.lastActive = Date(); return }
             if playing || editing { tab.lastActive = Date(); return }
             tab.interactionState = wv.interactionState
             tab.savedScrollY = tab.interactionState == nil ? y : 0
             tab.dropWebView()
             self.rebuildTabBar()
         }
-        wv.evaluateJavaScript(js) { result, _ in
-            let info = result as? [String: Any] ?? [:]
-            finish(info["playing"] as? Bool ?? false, info["editing"] as? Bool ?? false, info["y"] as? Double ?? 0)
+        wv.evaluateJavaScript(js) { result, error in
+            // 判定できなかった(JSエラー・読み込み中など)ときは「眠らせない」側に倒す。
+            // 以前は false 扱いで眠らせていたので、書きかけや再生中を取りこぼす可能性があった(Codex指摘 2026-09-23)
+            guard error == nil, let info = result as? [String: Any] else { finish(true, true, 0); return }
+            finish(info["playing"] as? Bool ?? true, info["editing"] as? Bool ?? true, info["y"] as? Double ?? 0)
         }
         // 3秒返事が無ければ「読み込み中で判定できない」とみなし、busy扱いで一旦諦める(強制はしない)。
         // 次の巡回で再挑戦できるよう lastActive は更新せず、in-flight フラグだけ下ろす
@@ -1374,6 +1420,42 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
     /// Idaten の内容領域を突き合わせる。①Chromiumで開く ②窓を動かして追従 ③WebKitタブへ切替→戻す ④結果を dock.json へ
     var selfTestDock = false
 
+    /// --selftest-session <dir>: 「タブを失わない」ことの検査。200件を保存 → 読み直し、
+    /// URL・順序・選択位置が完全一致するかを見る(以前は60件を超えた分を捨てていた)
+    func runSessionSelfTest(dir: URL) {
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        // 利用者のセッションファイルには触らない。検査は専用のファイルの上でやる。
+        // (最初は本物を退避して defer で戻す作りにしたが、NSApp.terminate で関数が戻らず defer が走らず、
+        //  終了時の自動保存で本人のセッションを検査データで上書きした。2026-09-23 の事故)
+        let session = dir.appendingPathComponent("session.test.json")
+        sessionPathOverride = session
+
+        let urls = (1...200).map { "https://example.com/t\($0)" }
+        let saved = Session(tabs: urls.map { SessionTab(url: $0, title: "タブ \($0)", engine: nil) }, selected: 137)
+        guard let data = try? JSONEncoder().encode(saved) else { return }
+        try? data.write(to: session, options: .atomic)
+
+        selfTestDir = nil          // 復元・保存の経路を通す(検査モードだと読み書きを止めてしまうため)
+        // ただし終了時の自動保存は、検査用ファイルにだけ効くようにしてある(sessionPathOverride)
+        let t0 = Date()
+        restoreSession()
+        let elapsed = Date().timeIntervalSince(t0)
+        let restored = tabs.compactMap { $0.url?.absoluteString }
+        let selectedIndex = selected.flatMap { s in tabs.firstIndex(where: { $0 === s }) } ?? -1
+        let awake = tabs.filter { $0.webView != nil }.count
+        let report: [String: Any] = [
+            "saved": urls.count, "restored": restored.count,
+            "orderMatches": restored == urls,
+            "selectedExpected": 137, "selectedActual": selectedIndex,
+            "awakeWebViewsAfterRestore": awake,      // 復元直後に作る WKWebView は選択中の1枚だけのはず
+            "restoreSeconds": (elapsed * 1000).rounded() / 1000,
+        ]
+        if let out = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) {
+            try? out.write(to: dir.appendingPathComponent("session.json"))
+        }
+        NSApp.terminate(nil)
+    }
+
     /// --selftest-tabs <dir>: タブの並べ替え(ドラッグ相当)と中クリックで閉じる経路を機械的に確かめる
     func runTabSelfTest(dir: URL) {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -1575,6 +1657,10 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
 
     // MARK: - セッション
 
+    /// 検査中だけ、セッションの読み書き先を差し替える。nil なら本人のファイル
+    var sessionPathOverride: URL?
+    private var sessionPath: URL { sessionPathOverride ?? paths.session }
+
     func saveSession() {
         if selfTestDir != nil { return }   // 自己検査は利用者のセッションを上書きしない
         let st = tabs.compactMap { t -> SessionTab? in
@@ -1583,23 +1669,20 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         }
         let idx = selected.flatMap { s in tabs.firstIndex(where: { $0 === s }) } ?? 0
         if let data = try? JSONEncoder().encode(Session(tabs: st, selected: idx)) {
-            try? data.write(to: paths.session, options: .atomic)
+            try? data.write(to: sessionPath, options: .atomic)
         }
     }
 
     /// 復元したタブは選択中の1枚以外すべて休眠のまま — 起動直後のメモリを抑える
     private func restoreSession() {
         if selfTestDir != nil { return }
-        guard let data = try? Data(contentsOf: paths.session),
+        guard let data = try? Data(contentsOf: sessionPath),
               let s = try? JSONDecoder().decode(Session.self, from: data), !s.tabs.isEmpty else { return }
-        // 暴走ガード: 万一セッションが壊れて/事故で肥大化していても、数百タブをそのまま復元して固まらないようにする。
-        // 超えた分は静かに捨てず、本人が気づけるようログへ残す
-        let cap = 60
-        let toRestore = s.tabs.count > cap ? Array(s.tabs.suffix(cap)) : s.tabs
-        if s.tabs.count > cap {
-            NSLog("Idaten: セッションに%d件あり、直近%d件だけ復元しました(残りは破棄)", s.tabs.count, cap)
-        }
-        for t in toRestore {
+        // 以前は60件を超えた分を「捨てて」いた。復元しなかったタブは次の保存で消えるので、作業の消失になる。
+        // 休眠状態のタブは WKWebView を作らないので、件数が多くても復元自体は軽い(重いのは UI 構築だけ)。
+        // なので全部復元する。UI の組み立ては skipUIRebuild でまとめて1回にする(O(N²)を避ける)
+        if s.tabs.count > 200 { NSLog("Idaten: セッションに%d件あります(全て復元します)", s.tabs.count) }
+        for t in s.tabs {
             guard let u = URL(string: t.url) else { continue }
             let tab = newTab(url: u, select: false, hibernated: true, title: t.title, skipUIRebuild: true)
             tab.isChromium = t.engine == .chromium   // Helium 側には選ばれた時に作る
@@ -1672,7 +1755,8 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
     }
 
     /// ファビコンはホスト単位で1回だけ取り、以後は使い回す。
-    /// 取得は WKWebView のデータストア越しではなく素の URLSession(Cookie を送らない)
+    /// 取得はページの中の fetch で行う。以前は URLSession で直接取りに行っていたが、それだと
+    /// 広告遮断のルールもプロファイルのCookie分離も通らない経路が1つ増えてしまう(Codex指摘 2026-09-23)
     private static var faviconCache: [String: NSImage] = [:]
     private func fetchFavicon(for tab: Tab, _ webView: WKWebView) {
         guard let host = webView.url?.host else { return }
@@ -1680,19 +1764,28 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
             if tab.favicon == nil { tab.favicon = cached; rebuildTabBar() }
             return
         }
-        let js = "(document.querySelector(\"link[rel~='icon']\") || {}).href || ''"
-        webView.evaluateJavaScript(js) { [weak self, weak tab] result, _ in
-            let href = (result as? String).flatMap { $0.isEmpty ? nil : URL(string: $0) }
-            guard let url = href ?? webView.url.flatMap({ URL(string: "/favicon.ico", relativeTo: $0)?.absoluteURL }) else { return }
-            URLSession.shared.dataTask(with: url) { data, _, _ in
-                guard let data, let image = NSImage(data: data), image.size.width > 0 else { return }
-                DispatchQueue.main.async {
-                    Self.faviconCache[host] = image
-                    guard let self, let tab, tab.favicon == nil else { return }
-                    tab.favicon = image
-                    self.rebuildTabBar()
-                }
-            }.resume()
+        let js = """
+        (async () => {
+          try {
+            var link = document.querySelector("link[rel~='icon']");
+            var href = link ? link.href : '/favicon.ico';
+            var res = await fetch(href, { credentials: 'omit' });
+            if (!res.ok) return '';
+            var buf = await res.arrayBuffer();
+            if (buf.byteLength === 0 || buf.byteLength > 300000) return '';
+            var bin = ''; var bytes = new Uint8Array(buf);
+            for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+            return btoa(bin);
+          } catch (e) { return ''; }
+        })()
+        """
+        webView.callAsyncJavaScript(js, in: nil, in: .page) { [weak self, weak tab] result in
+            guard case .success(let value) = result, let base64 = value as? String, !base64.isEmpty,
+                  let data = Data(base64Encoded: base64), let image = NSImage(data: data), image.size.width > 0 else { return }
+            Self.faviconCache[host] = image
+            guard let self, let tab, tab.favicon == nil else { return }
+            tab.favicon = image
+            self.rebuildTabBar()
         }
     }
 

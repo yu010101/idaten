@@ -1,0 +1,15 @@
+--- 回 1
+chrome-load-1 procs=74 mb=4131.5
+chrome-idle-1 procs=100 mb=5771.2
+idaten-load-1 procs=11 mb=857.5
+idaten-idle-1 procs=11 mb=880.8
+--- 回 2
+chrome-load-2 procs=69 mb=4107.9
+chrome-idle-2 procs=109 mb=6249.5
+idaten-load-2 procs=11 mb=821.9
+idaten-idle-2 procs=15 mb=643.0
+--- 回 3
+chrome-load-3 procs=76 mb=4672.3
+chrome-idle-3 procs=104 mb=6295.6
+idaten-load-3 procs=11 mb=951.4
+idaten-idle-3 procs=11 mb=981.5

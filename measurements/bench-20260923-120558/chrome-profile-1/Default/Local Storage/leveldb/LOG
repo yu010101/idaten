@@ -1,0 +1,14 @@
+2026/09/23-12:05:59.793 d57775 Creating DB /Users/yu01/idaten-browser/measurements/bench-20260923-120558/chrome-profile-1/Default/Local Storage/leveldb since it was missing.
+2026/09/23-12:05:59.807 d57775 Reusing MANIFEST /Users/yu01/idaten-browser/measurements/bench-20260923-120558/chrome-profile-1/Default/Local Storage/leveldb/MANIFEST-000001
+2026/09/23-12:06:07.478 d57779 Level-0 table #5: started
+2026/09/23-12:06:07.486 d57779 Level-0 table #5: 39515 bytes OK
+2026/09/23-12:06:07.492 d57779 Delete type=0 #3
+2026/09/23-12:06:09.860 d57779 Level-0 table #7: started
+2026/09/23-12:06:09.866 d57779 Level-0 table #7: 32194 bytes OK
+2026/09/23-12:06:09.872 d57779 Delete type=0 #4
+2026/09/23-12:06:17.155 d57779 Level-0 table #9: started
+2026/09/23-12:06:17.162 d57779 Level-0 table #9: 25678 bytes OK
+2026/09/23-12:06:17.167 d57779 Delete type=0 #6
+2026/09/23-12:06:50.722 d57775 Level-0 table #11: started
+2026/09/23-12:06:50.730 d57775 Level-0 table #11: 24522 bytes OK
+2026/09/23-12:06:50.733 d57775 Delete type=0 #8

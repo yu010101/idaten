@@ -1,0 +1,5 @@
+2026/09/23-12:09:40.849 d6334e Creating DB /Users/yu01/idaten-browser/measurements/bench-20260923-120558/chrome-profile-2/Default/Session Storage since it was missing.
+2026/09/23-12:09:40.854 d6334e Reusing MANIFEST /Users/yu01/idaten-browser/measurements/bench-20260923-120558/chrome-profile-2/Default/Session Storage/MANIFEST-000001
+2026/09/23-12:10:36.848 d6334e Level-0 table #5: started
+2026/09/23-12:10:36.856 d6334e Level-0 table #5: 28674 bytes OK
+2026/09/23-12:10:36.865 d6334e Delete type=0 #3

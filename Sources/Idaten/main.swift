@@ -46,6 +46,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         if args.contains("--no-adblock") { browser.settings.adBlockEnabled = false }   // この起動だけ。設定ファイルは書き換えない
         // --selftest-panels <dir>: 設定・履歴の画面を描き出して見た目を確かめる(画面収録の権限が無くても見られる)
+        // --bench <dir>: 比較計測用。利用者のセッション・履歴・ブックマークは読み書きせず、渡したURLを開いたまま待つ
+        if let i = args.firstIndex(of: "--bench"), args.indices.contains(i + 1) {
+            browser.selfTestDir = URL(fileURLWithPath: args[i + 1], isDirectory: true)
+            browser.selfTestDock = true     // 自己検査の撮影・終了処理は動かさない
+            browser.start(openURLs: argURLs)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
         if let i = args.firstIndex(of: "--selftest-panels"), args.indices.contains(i + 1) {
             let dir = URL(fileURLWithPath: args[i + 1], isDirectory: true)
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -62,6 +70,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 }
                 NSApp.terminate(nil)
             }
+            return
+        }
+        if let i = args.firstIndex(of: "--selftest-session"), args.indices.contains(i + 1) {
+            let dir = URL(fileURLWithPath: args[i + 1], isDirectory: true)
+            browser.selfTestDir = dir
+            browser.start(openURLs: [])
+            browser.runSessionSelfTest(dir: dir)
             return
         }
         if let i = args.firstIndex(of: "--selftest-tabs"), args.indices.contains(i + 1) {

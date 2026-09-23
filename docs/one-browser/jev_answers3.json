@@ -1,0 +1,68 @@
+{
+ "adv_1": {
+  "type": "choice",
+  "choice": "memory",
+  "probabilities": {
+   "privacy": 0,
+   "memory": 0.96,
+   "ads": 0,
+   "tabs": 0.04
+  }
+ },
+ "adv_2": {
+  "type": "choice",
+  "choice": "memory",
+  "probabilities": {
+   "privacy": 0,
+   "memory": 0.96,
+   "ads": 0,
+   "tabs": 0.04
+  }
+ },
+ "adv_3": {
+  "type": "choice",
+  "choice": "memory",
+  "probabilities": {
+   "privacy": 0.01,
+   "memory": 0.96,
+   "ads": 0,
+   "tabs": 0.03
+  }
+ },
+ "blocker_1": {
+  "type": "choice",
+  "choice": "ext",
+  "probabilities": {
+   "devtools": 0,
+   "ext": 0.42,
+   "habit": 0.21,
+   "sync": 0.37
+  }
+ },
+ "blocker_2": {
+  "type": "choice",
+  "choice": "ext",
+  "probabilities": {
+   "devtools": 0.01,
+   "ext": 0.65,
+   "habit": 0.1,
+   "sync": 0.24
+  }
+ },
+ "ctrl_ab": {
+  "type": "choice",
+  "choice": "yes",
+  "probabilities": {
+   "yes": 1,
+   "no": 0
+  }
+ },
+ "ctrl_ba": {
+  "type": "choice",
+  "choice": "yes",
+  "probabilities": {
+   "yes": 1,
+   "no": 0
+  }
+ }
+}

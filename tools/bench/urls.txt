@@ -1,0 +1,14 @@
+# 比較に使うURL。広告の多い日本のニュース系を中心に、動画1本と静的ページを混ぜる。
+# 両ブラウザに同じ順序で渡す
+https://www.yahoo.co.jp/
+https://news.yahoo.co.jp/
+https://www.itmedia.co.jp/news/
+https://gigazine.net/
+https://natalie.mu/
+https://www.oricon.co.jp/
+https://www.nhk.or.jp/news/
+https://www.jiji.com/
+https://ja.wikipedia.org/wiki/%E9%9F%8B%E9%A7%84%E5%A4%A9
+https://example.com/
+https://www.asahi.com/
+https://www3.nhk.or.jp/news/
