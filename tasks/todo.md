@@ -127,6 +127,60 @@
       さらに`newTab(skipUIRebuild:)`で復元ループ中の`rebuildTabBar()`/`saveSession()`をO(N²)からO(N)に修正
       (どちらか片方だけでも実際に本体が数GBまで膨張してクラッシュする事故だった。原因は動画・エンジンとは無関係)
 
+## 1ブラウザで完結(09-22、本人決定: 重ね窓 → Heliumフォークの二段)— 第1段は実装済・運用実績ゼロ
+経緯と一次資料: `docs/one-browser/`(Codex調査・Jev判定・Codexレビュー2回・差分)
+- [x] Codex調査: SwiftのNSViewへ拡張全対応のChromiumを埋め込む公式手段はmacOSに無い(CEFは親NSView指定でAlloyに落ちる、cef_types_mac.h)
+- [x] Jev判定(順番3通り入替・対照は両順正解): 今着手すべき=重ね窓 0.68〜0.84 / フォーク 0.02〜0.03。
+      ただし「内容領域クリックでメニューバーがHeliumになる状態を完結と感じるか」= 感じない 1.00 → 第2段が要る
+- [x] 第1段 実装: `ChromiumDock.swift`(Heliumを `--remote-debugging-pipe` で子起動・ポートは開けない)+
+      Chromiumタブを Idaten のタブバーに並べ、Heliumの窓を内容領域へ重ねて追従、内容領域は透明の穴(HoledRootView)
+- [x] 機械検査 `--selftest-dock`: 窓位置(CDPの実値)と内容領域が 開いた直後/窓の移動+縮小後/WebKit往復後 の3点で完全一致(3回実行)。
+      Heliumは必要時のみ起動(起動前pid=-1)、Idaten終了で約20秒後にHeliumも正常終了、"Could not write into pipe" 0件
+- [x] Codexレビュー11件のうち10件を修正(作成要求の取り違え・取消・SIGPIPE・flush無期限待ち・fd/子プロセス回収・
+      起動直後の切断で状態消失・古い前面化・WebKitへ戻すが負ける・作成中のURL入力・背景タブの選択奪取)。
+      Codex再レビュー(docs/one-browser/codex_review2.md): 完全5・部分5・未解決1+修正で入った問題4 → 全部に手を入れた:
+      作成失敗時はWebKitへ戻し外のHeliumへ渡す / Heliumで閉じたタブは一旦外して10秒以内に切断されたら戻す(迷ったら残す)/
+      WebKitへ戻したタブは明示の⌘⇧Eで再度切替可・古い状態を捨てる / 保留中の外部タブの題名更新 / shutdown後もfdを後始末 /
+      マウス素通しの切替をイベント駆動に。この3回目の修正後の再レビューはまだ(自己検査は2回とも全段一致)
+- [ ] **未検証: 穴越しのクリックがHeliumへ届くか・見た目(穴・タイトルバー)**。合成クリックは全画面のiTerm2に落ちて無効だった。
+      画面収録の権限が無く撮影もできない → 本人の目で確認が要る
+- [ ] Chromiumタブは休眠・常駐予算の対象外(従来の外部Heliumと同じ。統合するなら別途)
+- [ ] Helium側の自分のタブ切替(⌃Tab等)は Idaten の選択に反映されない(CDPにタブ活性化イベントが無い)
+- [ ] 拡張UI(Claudeのサイドパネル等)は重ねたHeliumの窓の中にそのまま出る想定。重ねた状態での実動作は未確認
+
+### 第2段(Heliumフォーク)— 09-23: ビルド場所は **GitHub Actions(無料)** に変更
+- **Helium 本体が GitHub Actions の macOS ランナーでビルドしている**(.github/workflows/build.yml → building.yml → build-phase.yml)。
+  6時間のジョブ上限を、成果物を受け渡して最大10ジョブに分けて再開する方式で越えている。sccache も使用。
+  署名の秘密が無ければ `codesign --sign -`(アドホック)に落ちるので、秘密なしでも完走する作り。
+  → **Macを借りる必要も外付けSSDも不要。公開リポジトリならランナーは無料**
+- [x] フォーク作成: yu010101/helium-macos・yu010101/helium。main を arm64 のみに変更(x86_64 は作らない)
+- [x] 無改造のビルドを起動(run 35807801715, macos-latest, arm64)。まず「フォークでも完走するか」を確かめる
+- [ ] 完走したら Idaten の変更(タブ休眠の予算制・名前とアイコン)を quilt パッチで載せる。拡張版(`extension/`)はそのまま同梱できる
+- [ ] 1Password 連携は Developer ID 署名が要る(アドホック署名では不可)
+### (旧案・保留) M4 mini + 外付けSSD / クラウドMac
+- 実測(09-22): このMac 空き24GiB・外付けなし / macmini-m4 = M4・24GB RAM・空き51GB・**brew も Xcode も無し** /
+  macmini-m2 = 3TB外付け(空き2.5TB・大文字小文字区別APFS・USB)だが ssh から TCC で読み書き不可、8GB RAM
+- 09-23 Scaleway を試した結果: 支払い+本人確認で M1-M/M2-M/M2-L の枠は付いたが **全機種 在庫切れ**、M4系は **枠0(要申請)**。
+  サーバーは1台も作っていない(課金ゼロ)。GitHub Actions で済むならこの経路は不要
+- 手元のビルド用スクリプト `tools/cloudbuild/build_helium.sh` は、借りたMacで走らせる場合に使える(Codexレビュー9件を反映済み)
+- [x] 中間形: `extension/`(MV3「Idaten」)= Swift版の休眠規則を移植(背景タブ上限6・放置10分・再生中/入力中は除外・例外ドメイン)。
+      判断は policy.js の純関数で node 試験6件合格(`node extension/policy.test.mjs`)。フォーク時はそのまま同梱できる
+- [x] 実物のHelium(一時プロファイル)で3つの規則を確認(09-23):
+      ①上限: 背景12枚+選択1枚 → 起きている背景タブ=6・休眠7
+      ②例外ドメイン: 上限2で背景4枚を休眠させても example.org だけ起きたまま
+      ③入力中: textarea に書きかけがあるタブは起きたまま、同条件の他タブは休眠(記録に busy:1)
+      途中で「1枚しか眠らない」と誤読した。実際はタブ作成のたびに少しずつ適用される動きだった。
+      追跡できるよう `lastRun` に background/busy/picked/discarded/failed を残すようにした(握り潰していた discard の失敗も記録する)
+- [x] Claude連携の検証B(Codex手順書 docs/one-browser/codex_claude_verify.md): Helium上のClaude拡張→Claude Code用ネイティブホストへ ping → **pong**。
+      manifestのコピー不要(HeliumがChrome側の登録を探す)。プロファイルのコピーで実施(本人のプロファイルは本人が使用中だったので触らず)
+- [ ] 検証D(`claude -p --chrome` でページを実際に読む)は未実施 — 本人の通常Chromeにも繋がる恐れがあるので、本人がいる時に対話で
+- [ ] 1Password: ネイティブホストの登録が見つからない(入っているのは 1Password 7)。最新版+「Add Browser」が要る
+- Jev(09-22、対照は両順正解): 中間形で要望は満たされたか = 満たされた 0.62〜0.74 / 次の一手 = ビルド環境 0.57〜0.64(3順とも1位)
+- Codex調査(docs/one-browser/codex_fork_answer.md): helium-macos は quilt パッチ方式。この Mac(M1 Pro/16GB/空き24GiB)では不足、
+  作業予算 200〜300GB を推奨(公式の最低値は無い)。1Password はDeveloper ID署名が要る。Heliumは Chrome の NativeMessagingHosts も探すパッチ持ち
+- [ ] 置き場所を決める(外付けSSD or 別Mac)
+- [ ] 1日検証: 既存HeliumでClaude Code ↔ Claude拡張の往復を1本通す(`claude --chrome` → `/chrome`)
+
 ## Phase 4 — 比較と報告
 - [ ] 現行Chrome / Karu(WebKit)/ Karu(混在)の比較表
 - [ ] crosscheck.sh でCodexに反証させる

@@ -1,0 +1,53 @@
+{
+ "pick_1": {
+  "type": "choice",
+  "choice": "dock",
+  "probabilities": {
+   "dock": 0.84,
+   "keep": 0.14,
+   "fork": 0.02
+  }
+ },
+ "pick_2": {
+  "type": "choice",
+  "choice": "dock",
+  "probabilities": {
+   "dock": 0.68,
+   "keep": 0.29,
+   "fork": 0.03
+  }
+ },
+ "pick_3": {
+  "type": "choice",
+  "choice": "dock",
+  "probabilities": {
+   "dock": 0.76,
+   "keep": 0.22,
+   "fork": 0.02
+  }
+ },
+ "ctrl_ab": {
+  "type": "choice",
+  "choice": "yes",
+  "probabilities": {
+   "no": 0,
+   "yes": 1
+  }
+ },
+ "ctrl_ba": {
+  "type": "choice",
+  "choice": "yes",
+  "probabilities": {
+   "no": 0,
+   "yes": 1
+  }
+ },
+ "seam_ok": {
+  "type": "choice",
+  "choice": "no",
+  "probabilities": {
+   "no": 1,
+   "yes": 0
+  }
+ }
+}

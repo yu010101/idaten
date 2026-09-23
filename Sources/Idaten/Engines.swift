@@ -95,7 +95,7 @@ final class ChromiumProcessEngine {
         return nil
     }
 
-    private func flags() -> [String] {
+    func flags() -> [String] {
         let text = (try? String(contentsOf: Paths.chromiumFlags, encoding: .utf8)) ?? ""
         return text.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty && !$0.hasPrefix("#") }

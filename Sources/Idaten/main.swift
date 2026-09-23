@@ -45,6 +45,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             browser.selfTestSetCookieDomain = args[i + 1]
         }
         if args.contains("--no-adblock") { browser.settings.adBlockEnabled = false }   // この起動だけ。設定ファイルは書き換えない
+        if let i = args.firstIndex(of: "--selftest-dock"), args.indices.contains(i + 1) {
+            // 別の自己検査と同じく利用者のセッションは読まない/書かない(selfTestDir を立てる)
+            let dir = URL(fileURLWithPath: args[i + 1], isDirectory: true)
+            browser.selfTestDir = dir
+            browser.selfTestDock = true
+            browser.start(openURLs: [])
+            if let url = argURLs.first { browser.runDockSelfTest(url: url, dir: dir) }
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
         browser.start(openURLs: argURLs + pendingURLs)
         pendingURLs = []
         NSApp.activate(ignoringOtherApps: true)
@@ -170,7 +180,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         urls.forEach(browser.open)
     }
 
-    func applicationWillTerminate(_ notification: Notification) { windows.values.forEach { $0.saveSession() } }
+    func applicationWillTerminate(_ notification: Notification) {
+        windows.values.forEach { $0.saveSession(); $0.dock.shutdown() }   // Helium も正常終了させる(次回は Idaten のセッションから開き直す)
+    }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
     private var profileMenu: NSMenu?

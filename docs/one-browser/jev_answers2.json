@@ -1,0 +1,61 @@
+{
+ "done_ab": {
+  "type": "choice",
+  "choice": "yes",
+  "probabilities": {
+   "yes": 0.62,
+   "no": 0.38
+  }
+ },
+ "done_ba": {
+  "type": "choice",
+  "choice": "yes",
+  "probabilities": {
+   "yes": 0.74,
+   "no": 0.26
+  }
+ },
+ "next_1": {
+  "type": "choice",
+  "choice": "build",
+  "probabilities": {
+   "daily": 0.33,
+   "onepw": 0.09,
+   "build": 0.58
+  }
+ },
+ "next_2": {
+  "type": "choice",
+  "choice": "build",
+  "probabilities": {
+   "daily": 0.29,
+   "onepw": 0.07,
+   "build": 0.64
+  }
+ },
+ "next_3": {
+  "type": "choice",
+  "choice": "build",
+  "probabilities": {
+   "daily": 0.34,
+   "onepw": 0.09,
+   "build": 0.57
+  }
+ },
+ "ctrl_ab": {
+  "type": "choice",
+  "choice": "a",
+  "probabilities": {
+   "a": 1,
+   "b": 0
+  }
+ },
+ "ctrl_ba": {
+  "type": "choice",
+  "choice": "a",
+  "probabilities": {
+   "a": 1,
+   "b": 0
+  }
+ }
+}

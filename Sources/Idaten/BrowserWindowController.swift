@@ -1,8 +1,64 @@
 import AppKit
 import WebKit
 
+/// 窓の背景を自前で塗る。Chromium タブを表示中は内容領域だけ塗らずに透明の穴にし、
+/// 真下に重ねた Helium の窓を見せる(透明な画素へのクリックは macOS が下の窓へ通す)
+final class HoledRootView: NSView {
+    var hole: NSRect? {
+        didSet {
+            guard hole != oldValue else { return }
+            needsDisplay = true
+            window?.invalidateShadow()
+            hole == nil ? stopPassThrough() : startPassThrough()
+        }
+    }
+
+    /// タイトルバー付きの窓で、透明の画素へのクリックが下の別アプリの窓へ抜ける保証は Apple の資料に無い
+    /// (Codexレビュー、2026-09-22)。合成クリックでの実測は、画面を全面で覆う別アプリの窓が前にあって
+    /// クリックがそちらへ落ちたため無効 — 未検証のまま。NSWindow には「一部だけマウスを素通し」する API が無いので、
+    /// 念のため、マウスが穴の上にある間だけ窓ごと素通しにする。
+    /// 窓の縁 4pt は除く(下端・左右の縁でのサイズ変更を残すため)
+    ///
+    /// 切り替えはマウス移動のイベントで即座に行う(タイマーだけだと、穴からツールバーへ動かして次の刻みの前に押すと
+    /// 窓が素通しのままでクリックが下へ落ちる。再レビュー指摘)。素通し中の移動は Helium 宛てなので
+    /// グローバルモニタで、そうでない間はローカルモニタで拾う。タイマーは取りこぼしの保険
+    private var passThroughTimer: Timer?
+    private var monitors: [Any] = []
+    private func startPassThrough() {
+        guard passThroughTimer == nil else { return }
+        window?.acceptsMouseMovedEvents = true
+        let moves: NSEvent.EventTypeMask = [.mouseMoved, .leftMouseUp, .rightMouseUp, .scrollWheel]
+        if let g = NSEvent.addGlobalMonitorForEvents(matching: moves, handler: { [weak self] _ in self?.updatePassThrough() }) { monitors.append(g) }
+        if let l = NSEvent.addLocalMonitorForEvents(matching: moves, handler: { [weak self] e in self?.updatePassThrough(); return e }) { monitors.append(l) }
+        let t = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in self?.updatePassThrough() }
+        RunLoop.main.add(t, forMode: .common)
+        passThroughTimer = t
+    }
+    private func stopPassThrough() {
+        passThroughTimer?.invalidate()
+        passThroughTimer = nil
+        monitors.forEach(NSEvent.removeMonitor)
+        monitors.removeAll()
+        window?.ignoresMouseEvents = false
+    }
+    private func updatePassThrough() {
+        guard let window, let hole else { return }
+        // ボタンを押したまま(ドラッグ中)は切り替えない。タブバーから始めたドラッグが途中で途切れないように
+        if NSEvent.pressedMouseButtons != 0 { return }
+        let inWindow = window.convertPoint(fromScreen: NSEvent.mouseLocation)
+        let inView = convert(inWindow, from: nil)
+        let inside = hole.insetBy(dx: 4, dy: 4).contains(inView)
+        if window.ignoresMouseEvents != inside { window.ignoresMouseEvents = inside }
+    }
+    override func draw(_ dirtyRect: NSRect) {
+        Theme.windowBackground.setFill()
+        bounds.fill()
+        if let hole { NSColor.clear.setFill(); hole.fill(using: .copy) }
+    }
+}
+
 final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDelegate,
-    WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate {
+    WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate, ChromiumDockDelegate {
 
     let window: NSWindow
     let profile: Profile
@@ -10,6 +66,9 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
     var settings = Settings.load()
     let rules: EngineRules
     let chromium: ChromiumProcessEngine
+    /// 第1段の「1ブラウザ」: Chromium タブを Idaten のタブバーに並べ、Helium の窓を内容領域へ重ねる
+    let dock: ChromiumDock
+    private let root = HoledRootView()
     let history: History
     let bookmarks: BookmarkStore
     /// このプロファイル専用のCookie/localStorage/認証状態。他プロファイルとは完全に別の身元になる
@@ -35,25 +94,30 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         self.paths = ProfilePaths(profile: profile)
         self.rules = EngineRules(path: paths.engineRules)
         self.chromium = ChromiumProcessEngine(profileDir: paths.chromiumProfile)
+        self.dock = ChromiumDock(engine: chromium, profileDir: paths.chromiumProfile)
         self.history = History(path: paths.history)
         self.bookmarks = BookmarkStore(path: paths.bookmarks)
         self.dataStore = WKWebsiteDataStore(forIdentifier: profile.dataStoreIdentifier)
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 860),
-                          styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                          styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                           backing: .buffered, defer: false)
         super.init()
         window.title = "Idaten — \(profile.name)"
         window.delegate = self
         window.setFrameAutosaveName("IdatenWindow-\(profile.id)")
         window.isReleasedWhenClosed = false
-        window.backgroundColor = Theme.windowBackground   // 動的NSColorなのでライト/ダーク切替に自動追従する
+        // 背景は HoledRootView が塗る(Theme の動的NSColorなのでライト/ダーク切替に追従)。窓自体は透明にしておかないと
+        // Chromium タブ表示中の「穴」が開かない。タイトルバーも内容の上に重ねて自前の背景で塗る
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.titlebarAppearsTransparent = true
         buildUI()
+        dock.delegate = self
     }
 
     // MARK: - UI
 
     private func buildUI() {
-        let root = NSView()
         window.contentView = root
 
         tabStack.orientation = .horizontal
@@ -124,7 +188,8 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
             root.addSubview(v)
         }
         NSLayoutConstraint.activate([
-            tabScroll.topAnchor.constraint(equalTo: root.topAnchor, constant: 4),
+            // fullSizeContentView なので、タイトルバー(信号機ボタン)の下から並べる
+            tabScroll.topAnchor.constraint(equalTo: (window.contentLayoutGuide as! NSLayoutGuide).topAnchor, constant: 4),
             tabScroll.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             tabScroll.trailingAnchor.constraint(equalTo: root.trailingAnchor),
             tabScroll.heightAnchor.constraint(equalToConstant: 28),
@@ -180,8 +245,8 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
             let dot = NSView(frame: NSRect(x: 0, y: 0, width: 6, height: 6))
             dot.wantsLayer = true
             dot.layer?.cornerRadius = 3
-            dot.layer?.backgroundColor = (tab.handedToChromium ? Theme.EngineDot.chromium : Theme.EngineDot.webkit).cgColor
-            dot.toolTip = tab.handedToChromium ? "Chromiumエンジンで表示中" : "WebKitエンジンで表示中"
+            dot.layer?.backgroundColor = (tab.isChromium ? Theme.EngineDot.chromium : Theme.EngineDot.webkit).cgColor
+            dot.toolTip = tab.isChromium ? "Chromiumエンジンで表示中" : "WebKitエンジンで表示中"
             dot.widthAnchor.constraint(equalToConstant: 6).isActive = true
             dot.heightAnchor.constraint(equalToConstant: 6).isActive = true
 
@@ -211,14 +276,16 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
 
     private func updateToolbar() {
         let wv = selected?.webView
-        backButton.isEnabled = wv?.canGoBack ?? false
-        forwardButton.isEnabled = wv?.canGoForward ?? false
+        // Chromium タブの戻れる/進めるは CDP から取らない(毎回問い合わせる割に得るものが少ない)。常に押せるようにしておく
+        let chromiumTab = selected?.isChromium == true
+        backButton.isEnabled = chromiumTab || (wv?.canGoBack ?? false)
+        forwardButton.isEnabled = chromiumTab || (wv?.canGoForward ?? false)
         if window.firstResponder !== urlField.currentEditor() {
             let s = selected?.url?.absoluteString ?? ""
             urlField.stringValue = s == "about:blank" ? "" : s
         }
         let always = rules.engine(forHost: selected?.url?.host, profileDefault: profile.defaultEngine) == .chromium
-        engineButton.title = always ? "Chromium固定" : "WebKit"
+        engineButton.title = selected?.isChromium == true ? (always ? "Chromium固定" : "Chromium") : "WebKit"
         window.title = selected.map { $0.title.isEmpty ? "Idaten" : $0.title } ?? "Idaten"
         let isBookmarked = selected?.url.map { u in bookmarks.items.contains(where: { $0.url == u.absoluteString }) } ?? false
         bookmarkButton.image = NSImage(systemSymbolName: isBookmarked ? "star.fill" : "star", accessibilityDescription: nil)
@@ -299,9 +366,15 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         selected?.webView?.removeFromSuperview()
         selected = tab
         tab.lastActive = Date()
+        if tab.isChromium {
+            showChromium(tab)
+            rebuildTabBar()
+            updateToolbar()
+            return
+        }
+        root.hole = nil
         if tab.webView == nil {   // 休眠からの復帰
             let wv = makeWebView(tab)
-            tab.handedToChromium = false
             if let state = tab.interactionState {
                 wv.interactionState = state   // 代入すると現在の項目を自分で読み込む
                 tab.interactionState = nil
@@ -331,6 +404,12 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
     func close(_ tab: Tab) {
         guard let i = tabs.firstIndex(where: { $0 === tab }) else { return }
         tab.dropWebView()
+        tab.pendingCreate = nil   // 応答待ちなら、届いたページは completion 側で閉じる
+        if let id = tab.chromiumTargetId {
+            if dockedTargetId == id { dockedTargetId = nil }
+            tab.chromiumTargetId = nil
+            dock.closeTarget(id)
+        }
         tabs.remove(at: i)
         if tabs.isEmpty { window.performClose(nil); return }
         if tab === selected {
@@ -448,6 +527,7 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
 
     @objc func switchEngine() {
         guard let tab = selected, let url = tab.url, let host = url.host else { return }
+        if tab.isChromium { moveBackToWebKit(tab); return }
         let already = rules.engine(forHost: host, profileDefault: profile.defaultEngine) == .chromium
         let alert = NSAlert()
         alert.messageText = "このページを Chromium エンジンで開きます"
@@ -459,10 +539,8 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         alert.accessoryView = check
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         rules.setOverride(host, check.state == .on ? .chromium : nil)
-        if handOff(url) {
-            tab.handedToChromium = true
-            if tabs.count > 1 { hibernate(tab, force: true) }
-        }
+        tab.forceWebKit = false   // 明示の切替は「WebKit のまま」の指定より優先する
+        handOff(url, in: tab)
         updateToolbar()
     }
 
@@ -480,17 +558,28 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         alert.accessoryView = check
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         rules.setOverride(host, check.state == .on ? .chromium : nil)
-        if handOff(tab.url!) {
-            tab.handedToChromium = true
-            if tabs.count > 1 { hibernate(tab, force: true) }
-        }
+        handOff(tab.url!, in: tab)
         updateToolbar()
     }
 
+    /// url を Chromium で開く。`tab` を渡せばそのタブ自体を Chromium タブへ置き換え、無ければ新しいタブにする。
+    /// Idaten のタブバーに並び、Helium の窓は内容領域へ重なる(別ブラウザとして立ち上がった形にはしない)
+    /// `tab` が背景のタブなら選択は奪わない(⌘クリックで裏に開いたページのリダイレクト等。Codexレビュー #11)
     @discardableResult
-    private func handOff(_ url: URL) -> Bool {
-        switch chromium.open(url) {
-        case .success: return true
+    private func handOff(_ url: URL, in tab: Tab? = nil, activate: Bool = true) -> Bool {
+        if let tab, tab.forceWebKit { return false }
+        switch dock.ensureStarted() {
+        case .success:
+            let t = tab ?? newTab(url: url, select: false, hibernated: true)
+            // 失敗したら WebKit へ戻せるよう、戻る/進むの履歴は捨てずに退避しておく(Codexレビュー #7)
+            if let wv = t.webView { t.interactionState = wv.interactionState }
+            t.dropWebView()
+            t.isChromium = true
+            t.chromiumTargetId = nil
+            t.url = url
+            if (tab == nil && activate) || (tab != nil && tab === selected) { select(t) } else { requestChromiumTarget(t); rebuildTabBar() }
+            saveSession()
+            return true
         case .failure(let err):
             let alert = NSAlert()
             alert.alertStyle = .warning
@@ -505,6 +594,168 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
             alert.runModal()
             return false
         }
+    }
+
+    // MARK: - Chromium タブ(ChromiumDock)
+
+    /// 最後に重ねた Chromium タブ。WebKit タブへ切り替えた後も、Idaten の窓を動かしたら一緒に動かす
+    /// (置いていくと Idaten の窓の外に Helium の窓がはみ出して見える)
+    private var dockedTargetId: String?
+
+    /// 内容領域の位置を CDP の座標系(主画面の左上が原点)で返す
+    private func dockRect() -> CGRect {
+        root.layoutSubtreeIfNeeded()
+        let r = window.convertToScreen(container.convert(container.bounds, to: nil))
+        let primaryHeight = NSScreen.screens.first?.frame.height ?? r.maxY
+        return CGRect(x: r.minX, y: primaryHeight - r.maxY, width: r.width, height: r.height)
+    }
+
+    private func showChromium(_ tab: Tab) {
+        root.layoutSubtreeIfNeeded()
+        root.hole = container.frame
+        progress.isHidden = true
+        window.makeFirstResponder(nil)
+        if case .failure = dock.ensureStarted() {
+            // Helium が無い等。従来どおり別アプリとして渡す経路へ落とす
+            if let url = tab.url { _ = chromium.open(url) }
+            return
+        }
+        if let id = tab.chromiumTargetId {
+            dockedTargetId = id
+            dock.show(id, at: dockRect(), stillWanted: { [weak self, weak tab] in tab != nil && self?.selected === tab })
+            return
+        }
+        requestChromiumTarget(tab)
+    }
+
+    /// Helium にこのタブのページを作ってもらう。応答が来た時点でタブが閉じられていたり WebKit へ戻されていたら、
+    /// 作られたページは閉じて捨てる(Codexレビュー #2)
+    private func requestChromiumTarget(_ tab: Tab) {
+        guard tab.pendingCreate == nil, tab.chromiumTargetId == nil, let url = tab.url else { return }
+        let token = UUID()
+        tab.pendingCreate = token
+        tab.urlAtCreate = url
+        dock.createTarget(url) { [weak self, weak tab] id in
+            guard let self else { return }
+            guard let tab, tab.pendingCreate == token, tab.isChromium,
+                  self.tabs.contains(where: { $0 === tab }) else {
+                if let id { self.dock.closeTarget(id) }
+                return
+            }
+            tab.pendingCreate = nil
+            guard let id else {
+                // 作れなかった(Helium が起動直後に終わった=同じプロファイルの Helium が既に動いていて転送した等、
+                // または createTarget 自体の失敗)。穴の開いたまま放置せず WebKit に戻し、URL は従来どおり外の Helium へ渡す
+                // (再レビュー: 切断時は先にこの失敗が届いてから dockDisconnected が来るので、ここで戻す)
+                tab.isChromium = false
+                _ = self.chromium.open(tab.url ?? url)
+                if tab === self.selected { self.select(tab) } else { self.rebuildTabBar() }
+                self.saveSession()
+                return
+            }
+            tab.chromiumTargetId = id
+            // 応答待ちの間に URL バーで別の URL を入れていたら、そちらへ移動し直す(Codexレビュー #10)
+            if let now = tab.url, now != tab.urlAtCreate { self.dock.navigate(id, to: now) }
+            tab.urlAtCreate = nil
+            if tab === self.selected {
+                self.dockedTargetId = id
+                self.dock.show(id, at: self.dockRect(), stillWanted: { [weak self, weak tab] in tab != nil && self?.selected === tab })
+            }
+        }
+    }
+
+    /// ⌘⇧E を Chromium タブで押したとき: WebKit へ戻す
+    private func moveBackToWebKit(_ tab: Tab) {
+        if let id = tab.chromiumTargetId { dock.closeTarget(id) }
+        if dockedTargetId == tab.chromiumTargetId { dockedTargetId = nil }
+        tab.chromiumTargetId = nil
+        tab.pendingCreate = nil
+        tab.isChromium = false
+        // ドメイン例外(親ドメイン指定も)やプロファイル既定が Chromium でも、このタブは WebKit のままにする。
+        // 完全一致の例外だけ消しても、読み込んだ瞬間にまた Chromium へ戻される(Codexレビュー #9)
+        tab.forceWebKit = true
+        tab.interactionState = nil   // Chromium へ移す前の WebKit の状態が残っていると、今の URL でなく古いページが戻る
+        select(tab)
+        saveSession()
+    }
+
+    private func heliumIsActive() -> Bool {
+        guard let pid = dock.pid else { return false }
+        return NSRunningApplication(processIdentifier: pid)?.isActive ?? false
+    }
+
+    func dockTargetCreated(_ targetId: String, url: URL?, title: String) {
+        if tabs.contains(where: { $0.chromiumTargetId == targetId }) { return }
+        // Helium 側で開かれたタブ(⌘T・拡張・リンクの別タブ)。Idaten のタブバーにも並べる
+        let tab = Tab()
+        tab.isChromium = true
+        tab.chromiumTargetId = targetId
+        tab.url = url
+        tab.title = title
+        if let sel = selected, let i = tabs.firstIndex(where: { $0 === sel }) { tabs.insert(tab, at: i + 1) } else { tabs.append(tab) }
+        // いま Helium を操作している最中に開いたタブなら、利用者はそれを見たいはず
+        if heliumIsActive() { select(tab) } else { rebuildTabBar() }
+        saveSession()
+    }
+
+    func dockTargetChanged(_ targetId: String, url: URL?, title: String) {
+        guard let tab = tabs.first(where: { $0.chromiumTargetId == targetId }) else { return }
+        if let url, url.absoluteString != "about:blank" {
+            if tab.url != url, selfTestDir == nil, let scheme = url.scheme, scheme == "http" || scheme == "https" {
+                history.record(url: url, title: title)
+            }
+            tab.url = url
+        }
+        if !title.isEmpty { tab.title = title }
+        rebuildTabBar()
+        if tab === selected { updateToolbar() }
+        saveSession()
+    }
+
+    /// Helium 側でタブが閉じられた。利用者が Helium の中でそのタブを閉じたのか、Helium ごと ⌘Q で終わる途中なのかは
+    /// この時点では区別できない(待ち時間で区別しようとすると両方向に外れる。再レビュー #3)。
+    /// なので一旦タブバーから外して控えておき、10秒以内に Helium ごと切断されたら元の位置へ戻す(迷ったら残す側)。
+    /// 外れるのは「タブを閉じてから10秒以内に Helium を終了した」場合だけで、そのときは閉じたタブが戻ってくる(失うよりまし)
+    private var closedInHelium: [(tab: Tab, index: Int, at: Date)] = []
+    func dockTargetDestroyed(_ targetId: String) {
+        guard let tab = tabs.first(where: { $0.chromiumTargetId == targetId }),
+              let i = tabs.firstIndex(where: { $0 === tab }) else { return }
+        if dockedTargetId == targetId { dockedTargetId = nil }
+        tab.chromiumTargetId = nil
+        let now = Date()
+        closedInHelium.removeAll { now.timeIntervalSince($0.at) > 10 }
+        // 最後の1枚なら窓ごと閉じてしまうので外さない(切断後に戻せなくなる)。選ばれたら Helium で開き直す
+        guard tabs.count > 1 else { rebuildTabBar(); return }
+        closedInHelium.append((tab, i, now))
+        close(tab)
+    }
+
+    func dockDisconnected() {
+        let now = Date()
+        for c in closedInHelium.sorted(by: { $0.index < $1.index }) where now.timeIntervalSince(c.at) <= 10 {
+            tabs.insert(c.tab, at: min(c.index, tabs.count))
+        }
+        closedInHelium.removeAll()
+        // タブは残し、選ばれたときに Helium を起動し直して開き直す
+        for t in tabs where t.isChromium { t.chromiumTargetId = nil }
+        dockedTargetId = nil
+        rebuildTabBar()
+        saveSession()
+    }
+
+    private func followWindow() {
+        if selected?.isChromium == true { root.layoutSubtreeIfNeeded(); root.hole = container.frame }
+        guard let id = dockedTargetId else { return }
+        dock.place(id, at: dockRect())
+    }
+    func windowDidMove(_ notification: Notification) { followWindow() }
+    func windowDidResize(_ notification: Notification) { followWindow() }
+    func windowDidEndLiveResize(_ notification: Notification) { followWindow() }
+    func windowDidMiniaturize(_ notification: Notification) { if let id = dockedTargetId { dock.minimize(id) } }
+    func windowDidDeminiaturize(_ notification: Notification) {
+        if let t = selected, t.isChromium, let id = t.chromiumTargetId {
+            dock.show(id, at: dockRect(), stillWanted: { [weak self, weak t] in t != nil && self?.selected === t })
+        } else { followWindow() }
     }
 
     // MARK: - 操作
@@ -528,9 +779,15 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
     /// メニュー(main.swift)がブックマーク一覧を再構築する際のフック。追加/削除のたびに呼ぶ
     var onBookmarksChanged: (() -> Void)?
     @objc func focusURLField() { window.makeFirstResponder(urlField); urlField.selectText(nil) }
-    @objc func goBack() { selected?.webView?.goBack() }
-    @objc func goForward() { selected?.webView?.goForward() }
-    @objc func reload() { selected?.webView?.reload() }
+    @objc func goBack() {
+        if let id = selected?.chromiumTargetId { dock.history(id, -1) } else { selected?.webView?.goBack() }
+    }
+    @objc func goForward() {
+        if let id = selected?.chromiumTargetId { dock.history(id, 1) } else { selected?.webView?.goForward() }
+    }
+    @objc func reload() {
+        if let id = selected?.chromiumTargetId { dock.reload(id) } else { selected?.webView?.reload() }
+    }
     @objc func nextTab() { step(+1) }
     @objc func previousTab() { step(-1) }
     @objc func hibernateOthers() { for t in tabs where t !== selected { hibernate(t, force: true) } }
@@ -545,7 +802,14 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
 
     @objc private func urlEntered() {
         guard let url = resolveInput(urlField.stringValue, searchURL: settings.searchURL) else { return }
-        if rules.engine(forHost: url.host, profileDefault: profile.defaultEngine) == .chromium { handOff(url); return }
+        if let tab = selected, tab.isChromium {   // Chromium タブの中での移動は Chromium のまま
+            tab.url = url
+            if let id = tab.chromiumTargetId { dock.navigate(id, to: url) } else if tab.pendingCreate == nil { showChromium(tab) }
+            return
+        }
+        if selected?.forceWebKit != true, rules.engine(forHost: url.host, profileDefault: profile.defaultEngine) == .chromium {
+            handOff(url, in: selected?.webView?.url == nil ? selected : nil); return
+        }
         if selected == nil { newTab(url: url); return }
         selected?.url = url
         selected?.webView?.load(URLRequest(url: url))
@@ -618,6 +882,92 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
     }
     private var hibReport: [String: Any] = [:]
 
+    /// --selftest-dock <dir>: 「1ブラウザ」第1段の機械検査。画面収録の権限なしで、CDP が返す Helium の窓の位置と
+    /// Idaten の内容領域を突き合わせる。①Chromiumで開く ②窓を動かして追従 ③WebKitタブへ切替→戻す ④結果を dock.json へ
+    var selfTestDock = false
+
+    /// 穴越しのクリックが Helium に届くかの実測。Idaten を前面(キー窓)に戻してから、穴の中心の座標を
+    /// clickpoint.json に書いて外(シェル)からの合成クリックを待ち、Helium のページが受けた回数を読む。
+    /// 画面の見た目は測れない(画面収録の権限が無い)が、クリックの行き先は機械的に確かめられる
+    private func clickThroughTest(_ done: @escaping () -> Void) {
+        guard let dir = selfTestDir, let id = selected?.chromiumTargetId else { done(); return }
+        dock.evaluate(id, "window.__idatenClicks = 0; addEventListener('mousedown', () => window.__idatenClicks++, true); 'ok'") { [self] _ in
+            NSApp.activate(ignoringOtherApps: true)
+            window.makeKeyAndOrderFront(nil)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [self] in
+                let r = dockRect()
+                let point = ["x": Int(r.midX), "y": Int(r.midY), "idatenIsActive": NSApp.isActive ? 1 : 0]
+                if let data = try? JSONSerialization.data(withJSONObject: point) {
+                    try? data.write(to: dir.appendingPathComponent("clickpoint.json"))
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [self] in
+                    dock.evaluate(id, "window.__idatenClicks") { [self] v in
+                        var rep = (try? JSONSerialization.jsonObject(with: Data(contentsOf: dir.appendingPathComponent("dock.partial.json")))) as? [String: Any] ?? [:]
+                        rep["clicksReceivedByHelium"] = v ?? "nil"
+                        rep["idatenActiveBeforeClick"] = point["idatenIsActive"]
+                        rep["heliumActiveAfterClick"] = dock.pid.flatMap { NSRunningApplication(processIdentifier: $0)?.isActive } ?? false
+                        if let d = try? JSONSerialization.data(withJSONObject: rep) { try? d.write(to: dir.appendingPathComponent("dock.partial.json")) }
+                        done()
+                    }
+                }
+            }
+        }
+    }
+    func runDockSelfTest(url: URL, dir: URL) {
+        var report: [String: Any] = [:]
+        func rect(_ r: CGRect) -> [String: Int] {
+            ["left": Int(r.minX.rounded()), "top": Int(r.minY.rounded()), "width": Int(r.width.rounded()), "height": Int(r.height.rounded())]
+        }
+        func finish() {
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            if let extra = (try? JSONSerialization.jsonObject(with: Data(contentsOf: dir.appendingPathComponent("dock.partial.json")))) as? [String: Any] {
+                report.merge(extra) { a, _ in a }
+            }
+            if let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) {
+                try? data.write(to: dir.appendingPathComponent("dock.json"))
+            }
+            NSApp.terminate(nil)
+        }
+        func measure(_ key: String, then: @escaping () -> Void) {
+            guard let t = selected, let id = t.chromiumTargetId else {
+                report[key] = ["error": "Chromiumタブが選ばれていない/targetId無し", "selectedIsChromium": selected?.isChromium ?? false]
+                then(); return
+            }
+            dock.windowBounds(id) { [self] b in
+                report[key] = ["expected": rect(dockRect()), "actual": b ?? [:], "hole": root.hole.map { rect($0) } ?? [:],
+                               "tabs": tabs.count, "title": t.title, "url": t.url?.absoluteString ?? ""]
+                then()
+            }
+        }
+        let wait = { (sec: Double, f: @escaping () -> Void) in DispatchQueue.main.asyncAfter(deadline: .now() + sec, execute: f) }
+        report["heliumPidBefore"] = dock.pid.map { Int($0) } ?? -1
+        handOff(url, in: selected)
+        wait(6) { [self] in
+            report["heliumPid"] = dock.pid.map { Int($0) } ?? -1
+            measure("1_opened") { [self] in
+                var f = window.frame; f.origin.x += 120; f.origin.y -= 60; f.size.width -= 80
+                window.setFrame(f, display: true)
+                wait(2) { [self] in
+                    measure("2_after_move_resize") { [self] in
+                        let chromeTab = selected
+                        newTab(url: URL(string: "https://example.com/"))
+                        wait(3) { [self] in
+                            report["3_webkit_selected"] = ["isChromium": selected?.isChromium ?? false, "hole": root.hole == nil ? "none" : "open",
+                                                           "webViewAttached": selected?.webView?.superview != nil]
+                            if let c = chromeTab { select(c) }
+                            wait(2) { [self] in
+                                measure("4_back_to_chromium") { [self] in
+                                    report["tabEngines"] = tabs.map { $0.isChromium ? "chromium" : "webkit" }
+                                    clickThroughTest { finish() }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     private func runSelfTest(_ wv: WKWebView, dir: URL) {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         func png(_ image: NSImage) -> Data? {
@@ -670,7 +1020,7 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         if selfTestDir != nil { return }   // 自己検査は利用者のセッションを上書きしない
         let st = tabs.compactMap { t -> SessionTab? in
             guard let u = t.url, u.absoluteString != "about:blank" else { return nil }
-            return SessionTab(url: u.absoluteString, title: t.title)
+            return SessionTab(url: u.absoluteString, title: t.title, engine: t.isChromium ? .chromium : nil)
         }
         let idx = selected.flatMap { s in tabs.firstIndex(where: { $0 === s }) } ?? 0
         if let data = try? JSONEncoder().encode(Session(tabs: st, selected: idx)) {
@@ -692,7 +1042,8 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         }
         for t in toRestore {
             guard let u = URL(string: t.url) else { continue }
-            newTab(url: u, select: false, hibernated: true, title: t.title, skipUIRebuild: true)
+            let tab = newTab(url: u, select: false, hibernated: true, title: t.title, skipUIRebuild: true)
+            tab.isChromium = t.engine == .chromium   // Helium 側には選ばれた時に作る
         }
         rebuildTabBar()
         if !tabs.isEmpty { select(tabs[min(max(0, s.selected), tabs.count - 1)]) }
@@ -705,6 +1056,8 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
 
     func windowWillClose(_ notification: Notification) {
         saveSession()
+        dock.delegate = nil
+        dock.shutdown()
         onClosed?()
     }
 
@@ -714,9 +1067,13 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
                  decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         if navigationAction.shouldPerformDownload { decisionHandler(.download); return }
         if navigationAction.targetFrame?.isMainFrame == true, let url = navigationAction.request.url,
+           tabs.first(where: { $0.webView === webView })?.forceWebKit != true,
            rules.engine(forHost: url.host, profileDefault: profile.defaultEngine) == .chromium {
             decisionHandler(.cancel)
-            handOff(url)
+            // まだ何も表示していないタブ(新規タブ・window.open 直後)なら、そのタブごと Chromium にする
+            let tab = tabs.first(where: { $0.webView === webView })
+            // 背景のタブから来た移動なら、新しく作る Chromium タブも背景のまま(再レビュー #11)
+            handOff(url, in: webView.url == nil ? tab : nil, activate: tab == nil || tab === selected)
             return
         }
         // ⌘クリックは裏のタブで開く
@@ -736,7 +1093,7 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         guard let tab = tabs.first(where: { $0.webView === webView }) else { return }
-        if let url = webView.url { history.record(url: url, title: webView.title) }
+        if selfTestDir == nil, let url = webView.url { history.record(url: url, title: webView.title) }   // 自己検査は利用者の履歴に書かない
         if tab.savedScrollY > 0 {
             webView.evaluateJavaScript("window.scrollTo(0, \(tab.savedScrollY))", completionHandler: nil)
             tab.savedScrollY = 0
@@ -745,7 +1102,7 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         saveSession()
         if let dir = selfTestDir, selfTestHibernate {
             advanceHibernateTest(tab, webView, dir: dir)
-        } else if let dir = selfTestDir, !selfTestFired, tab === selected {
+        } else if let dir = selfTestDir, !selfTestDock, !selfTestFired, tab === selected {
             selfTestFired = true
             // 遅延読み込みの広告・計測が出そろうのを待つ
             DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in self?.runSelfTest(webView, dir: dir) }

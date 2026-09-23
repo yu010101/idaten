@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "Idaten",
+  "version": "0.1.0",
+  "description": "Helium(Chromium)を Idaten にする: 起きている背景タブの数に上限を設けて休眠させる。再生中・入力中のタブは眠らせない",
+  "permissions": ["tabs", "storage", "alarms", "scripting"],
+  "host_permissions": ["<all_urls>"],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "options_page": "options.html",
+  "action": { "default_title": "Idaten: 休眠の状態", "default_popup": "options.html" }
+}
