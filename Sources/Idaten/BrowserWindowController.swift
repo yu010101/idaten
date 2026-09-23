@@ -102,7 +102,8 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
     let window: NSWindow
     let profile: Profile
     let paths: ProfilePaths
-    var settings = Settings.load()
+    /// 設定画面から保存されたら差し替わる(次の読み込み・次のタブから効く)
+    var settings = Settings.load() { didSet { scheduleHibernation() } }
     let rules: EngineRules
     let chromium: ChromiumProcessEngine
     /// 第1段の「1ブラウザ」: Chromium タブを Idaten のタブバーに並べ、Helium の窓を内容領域へ重ねる
@@ -118,6 +119,7 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
     private var ruleLists: [WKContentRuleList] = []
 
     private let tabStack = NSStackView()
+    private let tabScroll = NSScrollView()
     private let urlField = NSTextField()
     private let backButton = NSButton()
     private let forwardButton = NSButton()
@@ -163,7 +165,8 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         tabStack.spacing = 2
         tabStack.alignment = .centerY
         tabStack.edgeInsets = NSEdgeInsets(top: 0, left: 6, bottom: 0, right: 6)
-        let tabScroll = NSScrollView()
+        // rebuildTabBar で幅の計算に使うので、作ったものを保持しておく
+        let tabScroll = self.tabScroll
         tabScroll.documentView = tabStack
         tabScroll.hasHorizontalScroller = false
         tabScroll.drawsBackground = false
@@ -308,13 +311,18 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
             title.lineBreakMode = .byTruncatingTail
             title.font = .systemFont(ofSize: 12, weight: tab === selected ? .semibold : .regular)
             title.textColor = tab === selected ? .labelColor : .secondaryLabelColor
-            title.widthAnchor.constraint(lessThanOrEqualToConstant: 170).isActive = true
+            // 枚数が増えたら幅を詰める。詰まりきったら横スクロールに任せる
+            let available = tabScroll.bounds.width > 0 ? tabScroll.bounds.width : window.frame.width
+            let perTab = max(64, min(170, available / CGFloat(max(1, tabs.count)) - 46))
+            title.widthAnchor.constraint(lessThanOrEqualToConstant: perTab).isActive = true
+            title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
             let close = NSButton(image: NSImage(systemSymbolName: "xmark", accessibilityDescription: "閉じる")!,
                                  target: self, action: #selector(tabCloseClicked(_:)))
             close.tag = i
             close.isBordered = false
             close.imageScaling = .scaleProportionallyDown
             close.widthAnchor.constraint(equalToConstant: 14).isActive = true
+            close.isHidden = perTab < 80 && tab !== selected   // 細いときは選択中のタブだけに出す
             let cell = TabCellView(views: [mark, title, close])
             cell.onSelect = { [weak self, weak tab] in if let self, let tab { self.select(tab) } }
             cell.onClose = { [weak self, weak tab] in if let self, let tab { self.close(tab) } }
@@ -476,12 +484,68 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         if !hibernated {
             let wv = makeWebView(tab, configuration: configuration)
             // configuration つき = window.open 由来。読み込みは WebKit 自身が行うので load しない
-            if configuration == nil, let url, url.absoluteString != "about:blank" { wv.load(URLRequest(url: url)) }
+            if configuration == nil {
+                if let url, url.absoluteString != "about:blank" {
+                    wv.load(URLRequest(url: url))
+                } else {
+                    wv.loadHTMLString(newTabHTML(), baseURL: nil)   // 真っ白ではなく、よく見るサイトとブックマークを出す
+                }
+            }
         }
         guard !skipUIRebuild else { return tab }
         if select { self.select(tab) } else { rebuildTabBar() }
         saveSession()
         return tab
+    }
+
+    /// 新しいタブの中身。よく見るサイト(履歴)とブックマークを並べる。
+    /// 端末内で作る静的なHTMLで、外部への通信はしない
+    private func newTabHTML() -> String {
+        func esc(_ s: String) -> String {
+            s.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;")
+             .replacingOccurrences(of: ">", with: "&gt;").replacingOccurrences(of: "\"", with: "&quot;")
+        }
+        func card(_ url: String, _ title: String, _ sub: String) -> String {
+            let host = URL(string: url)?.host ?? url
+            let initial = String(host.replacingOccurrences(of: "www.", with: "").prefix(1)).uppercased()
+            return """
+            <a class="card" href="\(esc(url))" title="\(esc(url))">
+              <span class="badge">\(esc(initial))</span>
+              <span class="t">\(esc(title.isEmpty ? host : title))</span>
+              <span class="s">\(esc(sub))</span>
+            </a>
+            """
+        }
+        let top = history.topSites(limit: 8).map { card($0.url, $0.title, "\($0.count) 回") }
+        let marks = bookmarks.items.sorted { $0.addedAt > $1.addedAt }.prefix(8).map { card($0.url, $0.title, URL(string: $0.url)?.host ?? "") }
+        func section(_ name: String, _ cards: [String], _ empty: String) -> String {
+            "<h2>\(name)</h2>" + (cards.isEmpty ? "<p class=\"empty\">\(empty)</p>" : "<div class=\"grid\">" + cards.joined() + "</div>")
+        }
+        return """
+        <!doctype html><meta charset="utf-8"><title>新しいタブ</title>
+        <style>
+          :root { color-scheme: light dark; }
+          body { font: 14px -apple-system, system-ui, sans-serif; margin: 0; padding: 48px 32px;
+                 background: Canvas; color: CanvasText; }
+          .wrap { max-width: 760px; margin: 0 auto; }
+          h1 { font-size: 20px; font-weight: 600; margin: 0 0 28px; }
+          h2 { font-size: 12px; font-weight: 600; color: GrayText; letter-spacing: .04em; margin: 28px 0 10px; }
+          .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 10px; }
+          .card { display: flex; flex-direction: column; gap: 2px; padding: 12px; border-radius: 10px;
+                  border: 1px solid color-mix(in srgb, CanvasText 12%, transparent); text-decoration: none; color: inherit; }
+          .card:hover { background: color-mix(in srgb, CanvasText 6%, transparent); }
+          .badge { width: 26px; height: 26px; border-radius: 7px; display: grid; place-items: center; margin-bottom: 6px;
+                   background: color-mix(in srgb, AccentColor 22%, transparent); font-weight: 600; font-size: 13px; }
+          .t { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+          .s { color: GrayText; font-size: 12px; }
+          .empty { color: GrayText; }
+        </style>
+        <div class="wrap">
+          <h1>韋駄天</h1>
+          \(section("よく見るサイト", top, "まだ履歴がありません。上のURL欄に入力して始めてください。"))
+          \(section("ブックマーク", Array(marks), "⌘D でこのページをブックマークできます。"))
+        </div>
+        """
     }
 
     func select(_ tab: Tab) {
@@ -504,6 +568,8 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
                 tab.interactionState = nil
             } else if let url = tab.url, url.absoluteString != "about:blank" {
                 wv.load(URLRequest(url: url))
+            } else {
+                wv.loadHTMLString(newTabHTML(), baseURL: nil)
             }
         }
         if let wv = tab.webView {

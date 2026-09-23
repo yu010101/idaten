@@ -45,6 +45,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             browser.selfTestSetCookieDomain = args[i + 1]
         }
         if args.contains("--no-adblock") { browser.settings.adBlockEnabled = false }   // この起動だけ。設定ファイルは書き換えない
+        // --selftest-panels <dir>: 設定・履歴の画面を描き出して見た目を確かめる(画面収録の権限が無くても見られる)
+        if let i = args.firstIndex(of: "--selftest-panels"), args.indices.contains(i + 1) {
+            let dir = URL(fileURLWithPath: args[i + 1], isDirectory: true)
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            browser.selfTestDir = dir
+            browser.start(openURLs: [])
+            settingsWindow.show()
+            openHistory()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [self] in
+                for (name, view) in [("settings.png", settingsWindow.contentViewForTest),
+                                     ("history.png", historyWindow?.contentViewForTest)] {
+                    guard let view, let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { continue }
+                    view.cacheDisplay(in: view.bounds, to: rep)
+                    try? rep.representation(using: .png, properties: [:])?.write(to: dir.appendingPathComponent(name))
+                }
+                NSApp.terminate(nil)
+            }
+            return
+        }
         if let i = args.firstIndex(of: "--selftest-tabs"), args.indices.contains(i + 1) {
             let dir = URL(fileURLWithPath: args[i + 1], isDirectory: true)
             browser.selfTestDir = dir
@@ -252,6 +271,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private var downloadsMenu: NSMenu?
+    private lazy var settingsWindow: SettingsWindowController = {
+        let c = SettingsWindowController()
+        c.onSaved = { [weak self] s in
+            // 開いている窓にも即反映する(広告遮断の入れ替えなど、次の読み込みから効く)
+            self?.windows.values.forEach { $0.settings = s }
+        }
+        return c
+    }()
+    private var historyWindow: HistoryWindowController?
+
+    @objc private func openSettings() { settingsWindow.show() }
+
+    @objc private func openHistory() {
+        guard let browser = activeBrowser else { return }
+        let c = HistoryWindowController(history: browser.history)
+        c.onOpen = { [weak browser] url in browser?.open(url) }
+        historyWindow = c
+        c.show()
+    }
 
     /// ダウンロードの一覧をメニューに反映する。項目を選ぶと Finder で場所を開く
     private func rebuildDownloadsMenu() {
@@ -301,6 +339,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         _ = add("Idaten", [
             item("Idaten について", #selector(NSApplication.orderFrontStandardAboutPanel(_:)), "", []),
             .separator(),
+            { let i = item("設定…", #selector(openSettings), ","); i.target = self; return i }(),
+            .separator(),
             item("Idaten を隠す", #selector(NSApplication.hide(_:)), "h"),
             item("Idaten を終了", #selector(NSApplication.terminate(_:)), "q"),
         ])
@@ -334,6 +374,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             item("縮小", #selector(B.zoomOut), "-"),
             item("実際の大きさ", #selector(B.zoomReset), "0"),
         ])
+        let historyItem = item("履歴を表示…", #selector(openHistory), "y")
+        historyItem.target = self
+        _ = add("履歴", [historyItem])
         downloadsMenu = add("ダウンロード", [])
         downloadsMenu?.delegate = self   // 開くたびに今の一覧で作り直す
         _ = add("検索", [
