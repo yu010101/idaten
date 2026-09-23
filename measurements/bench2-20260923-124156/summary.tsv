@@ -1,3 +1,5 @@
 name	point	median_mib	peak_mib	procs_median	samples
 chrome-1	60s	5840.7	6321.5	111	28
 chrome-1	300s	6209.8	6321.5	112	29
+idaten-1	60s	489.2	532.6	11	30
+idaten-1	300s	480.5	532.6	11	30

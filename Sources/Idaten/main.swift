@@ -91,8 +91,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             settingsWindow.show()
             openHistory()
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [self] in
+                openEngineRules()
                 for (name, view) in [("settings.png", settingsWindow.contentViewForTest),
-                                     ("history.png", historyWindow?.contentViewForTest)] {
+                                     ("history.png", historyWindow?.contentViewForTest),
+                                     ("rules.png", rulesWindow?.contentViewForTest)] {
                     guard let view, let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { continue }
                     view.cacheDisplay(in: view.bounds, to: rep)
                     try? rep.representation(using: .png, properties: [:])?.write(to: dir.appendingPathComponent(name))
@@ -353,6 +355,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func openSettings() { settingsWindow.show() }
 
+    private var rulesWindow: EngineRulesWindowController?
+
+    @objc private func openEngineRules() {
+        guard let browser = activeBrowser else { return }
+        let c = EngineRulesWindowController(rules: browser.rules, profileName: browser.profile.name)
+        rulesWindow = c
+        c.show()
+    }
+
     @objc private func openHistory() {
         guard let browser = activeBrowser else { return }
         let c = HistoryWindowController(history: browser.history)
@@ -470,6 +481,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             item("ほかのタブを休眠させる", #selector(B.hibernateOthers), "z", [.command, .option]),
             .separator(),
             item("エンジンを切り替える(Chromiumで開く)", #selector(B.switchEngine), "e", [.command, .shift]),
+            { let i = item("Chromium で開くサイトの一覧…", #selector(openEngineRules), ""); i.target = self; return i }(),
             item("Chromium の拡張を使う…", #selector(B.showExtensionMenu(_:)), "e", [.command, .option]),
             .separator(),
             item("[デバッグ] 状態をダンプ", #selector(B.debugDumpState), "d", [.command, .option]),

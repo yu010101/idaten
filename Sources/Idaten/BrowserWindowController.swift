@@ -331,6 +331,7 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
                                                      .value: profile.id, .expires: Date().addingTimeInterval(3600)])!
                 dataStore.httpCookieStore.setCookie(cookie, completionHandler: nil)
             }
+            importFromManagedChromium()
             rebuildBookmarkBar()
             restoreSession()
             for u in openURLs { newTab(url: u) }
@@ -1179,6 +1180,23 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         close(tab)
     }
 
+    /// Chromium 側で溜まったブックマークと履歴を取り込む(読むだけ・片方向)。
+    /// 重複は BookmarkStore が弾くので、何度呼んでも増えない
+    func importFromManagedChromium() {
+        guard selfTestDir == nil || sessionPathOverride != nil else { return }   // 自己検査では触らない
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self else { return }
+            let r = ChromeImport.importFromManagedChromium(profileDir: self.paths.chromiumProfile,
+                                                           into: self.paths.history, bookmarks: self.bookmarks)
+            guard r.bookmarks > 0 || r.history > 0 else { return }
+            NSLog("Idaten: Chromium から取り込み ブックマーク%d件 履歴%d件", r.bookmarks, r.history)
+            DispatchQueue.main.async {
+                self.rebuildBookmarkBar()
+                self.onBookmarksChanged?()
+            }
+        }
+    }
+
     func dockDisconnected() {
         let now = Date()
         for c in closedInHelium.sorted(by: { $0.index < $1.index }) where now.timeIntervalSince(c.at) <= 10 {
@@ -1190,6 +1208,7 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         dockedTargetId = nil
         rebuildTabBar()
         saveSession()
+        importFromManagedChromium()   // Helium が終わったので、そこで増えたブックマーク・履歴を取り込む
     }
 
     private func followWindow() {

@@ -30,8 +30,9 @@ enum ChromeImport {
     // MARK: - ブックマーク
 
     /// Chromeの Bookmarks はJSONで、bookmark_bar/other/synced の3ルート配下に folder/url ノードが木構造で入る
-    static func readBookmarks(profileDir: String) -> [(title: String, url: String, folder: String)] {
-        let path = chromeRoot.appendingPathComponent(profileDir).appendingPathComponent("Bookmarks")
+    /// `root` を渡すと Chrome 以外(Idaten 管理下の Helium など)からも読める
+    static func readBookmarks(profileDir: String, root: URL? = nil) -> [(title: String, url: String, folder: String)] {
+        let path = (root ?? chromeRoot).appendingPathComponent(profileDir).appendingPathComponent("Bookmarks")
         guard let data = try? Data(contentsOf: path),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let roots = obj["roots"] as? [String: Any] else { return [] }
@@ -60,8 +61,8 @@ enum ChromeImport {
 
     /// Chromeは起動中 History をロックするので、一旦コピーしてから読む(Chrome側には一切触れない)
     @discardableResult
-    static func importHistory(profileDir: String, into historyPath: URL) -> Int {
-        let src = chromeRoot.appendingPathComponent(profileDir).appendingPathComponent("History")
+    static func importHistory(profileDir: String, into historyPath: URL, root: URL? = nil) -> Int {
+        let src = (root ?? chromeRoot).appendingPathComponent(profileDir).appendingPathComponent("History")
         guard FileManager.default.fileExists(atPath: src.path) else { return 0 }
         let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".sqlite")
         guard (try? FileManager.default.copyItem(at: src, to: tmp)) != nil else { return 0 }
@@ -137,5 +138,29 @@ enum ChromeImport {
             return message
         }
         return nil
+    }
+}
+
+
+// MARK: - Idaten 管理下の Chromium(Helium)からの取り込み
+
+extension ChromeImport {
+    /// Idaten が渡した先(Helium)で溜まったブックマークと履歴を、Idaten 側へ写す。
+    /// 読むだけ・片方向・重複は増やさない。Chromium 側のファイルには一切書かない。
+    ///
+    /// なぜ要るか: 拡張が要る作業を Chromium でしている間、Idaten 側の履歴もブックマークも育たない。
+    /// 実測(2026-09-23)で Idaten 34件 / Helium 1,218件、ブックマークは 0件 / 842件だった。
+    @discardableResult
+    static func importFromManagedChromium(profileDir chromiumProfile: URL,
+                                          into historyPath: URL,
+                                          bookmarks: BookmarkStore) -> (bookmarks: Int, history: Int) {
+        let root = chromiumProfile.deletingLastPathComponent()
+        let dirName = chromiumProfile.lastPathComponent
+        let marks = readBookmarks(profileDir: dirName + "/Default", root: root)
+        let before = bookmarks.items.count
+        for m in marks { bookmarks.add(title: m.title, url: m.url, folder: m.folder) }
+        let added = bookmarks.items.count - before
+        let visits = importHistory(profileDir: dirName + "/Default", into: historyPath, root: root)
+        return (added, visits)
     }
 }
