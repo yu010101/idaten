@@ -46,6 +46,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         if args.contains("--no-adblock") { browser.settings.adBlockEnabled = false }   // この起動だけ。設定ファイルは書き換えない
         // --selftest-panels <dir>: 設定・履歴の画面を描き出して見た目を確かめる(画面収録の権限が無くても見られる)
+        // --selftest-cookie-carry <dir> <url>: ログインの持ち込みが効くか(本人の情報は使わない)
+        if let i = args.firstIndex(of: "--selftest-cookie-carry"), args.indices.contains(i + 1) {
+            let dir = URL(fileURLWithPath: args[i + 1], isDirectory: true)
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            ProfilePaths.directoryOverride = dir
+            let isolated = BrowserWindowController(profile: Profile.makeNew(name: "cookiecarry", colorHex: "#888888"))
+            windows["cookiecarry"] = isolated
+            isolated.selfTestDir = dir
+            isolated.start(openURLs: [])
+            if let url = argURLs.first { isolated.runCookieCarrySelfTest(url: url, dir: dir) }
+            return
+        }
+
+        // --selftest-cookie-attrs <dir>: Cookie の属性の返り方を測る(値は記録しない)
+        if let i = args.firstIndex(of: "--selftest-cookie-attrs"), args.indices.contains(i + 1) {
+            let dir = URL(fileURLWithPath: args[i + 1], isDirectory: true)
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            ProfilePaths.directoryOverride = dir
+            let isolated = BrowserWindowController(profile: Profile.makeNew(name: "cookieprobe", colorHex: "#888888"))
+            windows["cookieprobe"] = isolated
+            isolated.selfTestDir = dir
+            isolated.start(openURLs: [])
+            isolated.runCookieAttrSelfTest(dir: dir)
+            return
+        }
+
         // --selftest-scroll <dir> <url>: 受け渡しでスクロール位置が引き継がれるか
         if let i = args.firstIndex(of: "--selftest-scroll"), args.indices.contains(i + 1) {
             let dir = URL(fileURLWithPath: args[i + 1], isDirectory: true)
@@ -84,6 +110,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             isolated.settings.adBlockEnabled = browser.settings.adBlockEnabled
             windows["bench"] = isolated
             isolated.start(openURLs: argURLs)
+            isolated.startBenchStateRecording(to: dir)   // 何を表示・再生していたかを残す
             NSApp.activate(ignoringOtherApps: true)
             return
         }

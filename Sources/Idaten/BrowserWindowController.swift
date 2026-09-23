@@ -105,6 +105,8 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
     /// 設定画面から保存されたら差し替わる(次の読み込み・次のタブから効く)
     var settings = Settings.load() { didSet { scheduleHibernation() } }
     let rules: EngineRules
+    /// 「このサイトのログインも Chromium へ持っていく」指定(既定は空)
+    var cookieShare: CookieShare
     let chromium: ChromiumProcessEngine
     /// 第1段の「1ブラウザ」: Chromium タブを Idaten のタブバーに並べ、Helium の窓を内容領域へ重ねる
     let dock: ChromiumDock
@@ -138,6 +140,7 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         self.profile = profile
         self.paths = ProfilePaths(profile: profile)
         self.rules = EngineRules(path: paths.engineRules)
+        self.cookieShare = CookieShare(path: paths.dir.appendingPathComponent("cookie_share.json"))
         self.chromium = ChromiumProcessEngine(profileDir: paths.chromiumProfile)
         self.dock = ChromiumDock(engine: chromium, profileDir: paths.chromiumProfile)
         self.history = History(path: paths.history)
@@ -859,10 +862,33 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         alert.addButton(withTitle: "キャンセル")
         let check = NSButton(checkboxWithTitle: "\(host) は常に Chromium で開く", target: nil, action: nil)
         check.state = already ? .on : .off
-        alert.accessoryView = check
+        let cookieCheck = NSButton(checkboxWithTitle: "このサイトのログインも持っていく", target: nil, action: nil)
+        cookieCheck.state = cookieShare.matches(host: host).isEmpty ? .off : .on
+        cookieCheck.toolTip = "この端末の中で、このサイトのログイン情報を Chromium 側にも複製します。"
+            + "Chromium 側では Keychain の鍵で暗号化された別のファイルに保存されます。"
+        if CookieShare.isExcluded(host: host) {
+            cookieCheck.isEnabled = false
+            cookieCheck.title = "このサイトのログインは持っていけません(対象外のサイト)"
+        }
+        let accessory = NSStackView(views: [check, cookieCheck])
+        accessory.orientation = .vertical
+        accessory.alignment = .leading
+        alert.accessoryView = accessory
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         rules.setOverride(host, check.state == .on ? .chromium : nil)
         tab.forceWebKit = false   // 明示の切替は「WebKit のまま」の指定より優先する
+        if cookieCheck.isEnabled {
+            if cookieCheck.state == .on {
+                dataStore.httpCookieStore.getAllCookies { [self] all in
+                    cookieShare.allow(host: host, cookies: all)
+                    handOff(url, in: tab)
+                }
+                updateToolbar()
+                return
+            } else {
+                cookieShare.removeAll(host: host)
+            }
+        }
         handOff(url, in: tab)
         updateToolbar()
     }
@@ -1085,6 +1111,39 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         dock.activateInHelium(id)
     }
 
+    /// 指定があるサイトなら、ページを作る**前**に Cookie を入れる。
+    /// 逆順だと、ログアウトした状態のページが読み込まれてから Cookie が入るので「効かなかった」ように見える
+    private func carryCookiesIfAllowed(for url: URL, _ done: @escaping () -> Void) {
+        guard let host = url.host, !CookieShare.isExcluded(host: host) else { done(); return }
+        let wanted = cookieShare.matches(host: host)
+        guard !wanted.isEmpty else { done(); return }
+        dataStore.httpCookieStore.getAllCookies { [weak self] all in
+            guard let self else { done(); return }
+            let params = all.filter { c in
+                wanted.contains { rule in
+                    rule.name == c.name && (rule.host?.lowercased() == c.domain.lowercased()
+                                            || rule.domain?.lowercased() == c.domain.lowercased())
+                }
+            }.compactMap(CookieShare.toCDP)
+            guard !params.isEmpty else { done(); return }
+            self.dock.setCookiesOneByOne(params) { [weak self] sent, failed in
+                // 「送れた」は「入った」ではない(拒否されても成功が返る)。名前・ドメイン・パスだけで読み返す
+                self?.dock.cookieKeys { keys in
+                    let landed = params.filter { p in
+                        let name = p["name"] as? String ?? ""
+                        let domain = (p["domain"] as? String ?? "")
+                        let path = p["path"] as? String ?? "/"
+                        // Chromium 側は先頭ドットを落として保持することがあるので、両方で照合する
+                        return keys.contains("\(name)|\(domain)|\(path)")
+                            || keys.contains("\(name)|\(domain.hasPrefix(".") ? String(domain.dropFirst()) : "." + domain)|\(path)")
+                    }.count
+                    NSLog("Idaten: ログインの持ち込み 送信%d 失敗%d 入った%d(値は記録しない)", sent, failed, landed)
+                    done()
+                }
+            }
+        }
+    }
+
     /// Helium にこのタブのページを作ってもらう。応答が来た時点でタブが閉じられていたり WebKit へ戻されていたら、
     /// 作られたページは閉じて捨てる(Codexレビュー #2)
     private func requestChromiumTarget(_ tab: Tab) {
@@ -1092,6 +1151,13 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         let token = UUID()
         tab.pendingCreate = token
         tab.urlAtCreate = url
+        carryCookiesIfAllowed(for: url) { [weak self, weak tab] in
+            guard let self, let tab, tab.pendingCreate == token else { return }
+            self.createChromiumTarget(tab, url: url, token: token)
+        }
+    }
+
+    private func createChromiumTarget(_ tab: Tab, url: URL, token: UUID) {
         dock.createTarget(url) { [weak self, weak tab] id in
             guard let self else { return }
             guard let tab, tab.pendingCreate == token, tab.isChromium,
@@ -1560,6 +1626,147 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
     /// --selftest-dock <dir>: 「1ブラウザ」第1段の機械検査。画面収録の権限なしで、CDP が返す Helium の窓の位置と
     /// Idaten の内容領域を突き合わせる。①Chromiumで開く ②窓を動かして追従 ③WebKitタブへ切替→戻す ④結果を dock.json へ
     var selfTestDock = false
+
+    /// --selftest-cookie-carry <dir> <url>: ログインの持ち込みの検査。
+    /// url は手元のサーバー(受け取った Cookie を本文に書き返すもの)を指す
+    func runCookieCarrySelfTest(url: URL, dir: URL) {
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        selfTestDir = nil
+        var report: [String: Any] = [:]
+        let host = url.host ?? "127.0.0.1"
+        let wait = { (s: Double, f: @escaping () -> Void) in DispatchQueue.main.asyncAfter(deadline: .now() + s, execute: f) }
+        func finish() {
+            if let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) {
+                try? data.write(to: dir.appendingPathComponent("cookie_carry.json"))
+            }
+            dock.shutdown()
+            wait(2) { NSApp.terminate(nil) }
+        }
+        // 検証用の Cookie を WebKit 側に仕込む(ログインの代わり)
+        let props: [HTTPCookiePropertyKey: Any] = [
+            .domain: host, .path: "/", .name: "idaten_session_probe", .value: "carried",
+            .expires: Date().addingTimeInterval(3600),
+        ]
+        guard let cookie = HTTPCookie(properties: props) else { report["error"] = "Cookie を作れない"; finish(); return }
+        dataStore.httpCookieStore.setCookie(cookie) { [self] in
+            newTab(url: url)
+            wait(6) { [self] in
+                // WebKit 側で「ログイン状態」に見えるか(サーバーが Cookie を書き返す)
+                selected?.webView?.evaluateJavaScript("document.body.innerText.includes('carried')") { [self] v, _ in
+                    report["webkitLoggedIn"] = (v as? Bool) ?? false
+                    // 持ち込みを許可して受け渡し
+                    dataStore.httpCookieStore.getAllCookies { [self] all in
+                        cookieShare.allow(host: host, cookies: all.filter { $0.name == "idaten_session_probe" })
+                        report["rules"] = cookieShare.matches(host: host).count
+                        handOff(url, in: selected)
+                        wait(14) { [self] in
+                            guard let id = selected?.chromiumTargetId else { report["error"] = "Chromium タブが無い"; finish(); return }
+                            dock.evaluate(id, "document.body.innerText.includes('carried')") { [self] v2 in
+                                report["chromiumLoggedIn"] = (v2 as? Bool) ?? false
+                                // 元(WebKit 側)が壊れていないかも見る ← 一番大事
+                                dataStore.httpCookieStore.getAllCookies { [self] after in
+                                    report["webkitCookieStillThere"] = after.contains { $0.name == "idaten_session_probe" }
+                                    finish()
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// --selftest-cookie-attrs <dir>: SameSite 未指定の Cookie が nil で返るか "none" で返るかを測る。
+    /// 値は記録しない(真偽だけ)
+    func runCookieAttrSelfTest(dir: URL) {
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let store = dataStore.httpCookieStore
+        // 3種類仕込む: SameSite を指定しない / Lax / (Secure+None)
+        let base: [HTTPCookiePropertyKey: Any] = [
+            .domain: "idaten-cookie-probe.example", .path: "/", .expires: Date().addingTimeInterval(3600),
+        ]
+        var props1 = base; props1[.name] = "probe_unspecified"; props1[.value] = "1"
+        var props2 = base; props2[.name] = "probe_lax"; props2[.value] = "1"; props2[.sameSitePolicy] = HTTPCookieStringPolicy.sameSiteLax
+        var props3 = base; props3[.name] = "probe_none"; props3[.value] = "1"; props3[.secure] = "TRUE"
+        props3[.sameSitePolicy] = HTTPCookieStringPolicy.sameSiteStrict
+        let cookies = [props1, props2, props3].compactMap { HTTPCookie(properties: $0) }
+
+        let group = DispatchGroup()
+        for c in cookies { group.enter(); store.setCookie(c) { group.leave() } }
+        group.notify(queue: .main) { [self] in
+            store.getAllCookies { all in
+                let mine = all.filter { $0.domain.contains("idaten-cookie-probe") }
+                var report: [String: Any] = ["仕込んだ数": cookies.count, "読み出せた数": mine.count]
+                for c in mine {
+                    // 記録するのは属性の有無だけ。値は書かない
+                    report[c.name] = [
+                        "sameSiteIsNil": c.sameSitePolicy == nil,
+                        "sameSiteRaw": c.sameSitePolicy.map { $0.rawValue } ?? "nil",
+                        "secure": c.isSecure,
+                        "httpOnly": c.isHTTPOnly,
+                        "isSessionOnly": c.isSessionOnly,
+                        "domainStartsWithDot": c.domain.hasPrefix("."),
+                        "hasExpires": c.expiresDate != nil,
+                    ]
+                }
+                if let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) {
+                    try? data.write(to: dir.appendingPathComponent("cookie_attrs.json"))
+                }
+                // 後片付け(検査用のCookieを残さない)
+                let cleanup = DispatchGroup()
+                for c in mine { cleanup.enter(); store.delete(c) { cleanup.leave() } }
+                cleanup.notify(queue: .main) { NSApp.terminate(nil) }
+            }
+        }
+    }
+
+    /// 比較計測のとき、30秒ごとに「タブの状態・読み込み完了数・動画が再生中か」を書き出す。
+    /// 数字(メモリ)だけでなく、両ブラウザが同じ仕事をしていたかを後から確かめられるようにするため
+    private var benchStateTimer: Timer?
+    func startBenchStateRecording(to dir: URL) {
+        let write: () -> Void = { [weak self] in
+            guard let self else { return }
+            var loaded = 0
+            var videoPlaying: Bool?
+            let group = DispatchGroup()
+            for tab in self.tabs {
+                guard let wv = tab.webView else { continue }
+                group.enter()
+                wv.evaluateJavaScript("(() => { const v = document.querySelector('video'); return JSON.stringify({ready: document.readyState, playing: v ? (!v.paused && !v.ended && v.currentTime > 0) : null}); })()") { value, _ in
+                    defer { group.leave() }
+                    guard let s = value as? String, let d = s.data(using: .utf8),
+                          let info = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return }
+                    if info["ready"] as? String == "complete" { loaded += 1 }
+                    if let playing = info["playing"] as? Bool { videoPlaying = playing }
+                }
+            }
+            group.notify(queue: .main) {
+                let state: [String: Any] = [
+                    "at": ISO8601DateFormatter().string(from: Date()),
+                    "tabs": self.tabs.count,
+                    "awake": self.tabs.filter { $0.webView != nil }.count,
+                    "hibernated": self.tabs.filter { $0.isHibernated }.count,
+                    "loaded": loaded,
+                    "videoPlaying": videoPlaying as Any,
+                    "adBlockEnabled": self.settings.adBlockEnabled,
+                    "hibernateMinutes": self.settings.hibernateMinutes,
+                ]
+                if let data = try? JSONSerialization.data(withJSONObject: state),
+                   let line = String(data: data, encoding: .utf8) {
+                    let path = dir.appendingPathComponent("state.jsonl")
+                    if let handle = try? FileHandle(forWritingTo: path) {
+                        handle.seekToEndOfFile()
+                        handle.write(Data((line + "\n").utf8))
+                        try? handle.close()
+                    } else {
+                        try? (line + "\n").write(to: path, atomically: true, encoding: .utf8)
+                    }
+                }
+            }
+        }
+        write()
+        benchStateTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { _ in write() }
+    }
 
     /// --selftest-scroll <dir> <url>: 受け渡しでスクロール位置が引き継がれるかを測る
     func runScrollSelfTest(url: URL, dir: URL) {

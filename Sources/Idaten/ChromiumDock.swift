@@ -262,6 +262,33 @@ final class ChromiumDock {
 
     func closeTarget(_ id: String) { cdp?.send("Target.closeTarget", ["targetId": id]) }
 
+    /// Cookie を1件ずつ入れる。`Storage.setCookies` は配列の1件でも変換に失敗すると**全件入らない**ので、
+    /// まとめて送らない。さらに保存が拒否されても成功が返る作りなので、入れた後に必ず読み返す
+    func setCookiesOneByOne(_ params: [[String: Any]], _ done: @escaping (_ sent: Int, _ failed: Int) -> Void) {
+        guard let cdp, !params.isEmpty else { done(0, 0); return }
+        var sent = 0, failed = 0
+        func step(_ i: Int) {
+            guard i < params.count else { done(sent, failed); return }
+            cdp.send("Storage.setCookies", ["cookies": [params[i]]]) { _, err in
+                if err == nil { sent += 1 } else { failed += 1 }
+                step(i + 1)
+            }
+        }
+        step(0)
+    }
+
+    /// 入っているかを名前・ドメイン・パスだけで確かめる(値は読まない・記録しない)
+    func cookieKeys(_ done: @escaping (Set<String>) -> Void) {
+        guard let cdp else { done([]); return }
+        cdp.send("Storage.getCookies") { r, _ in
+            let list = (r?["cookies"] as? [[String: Any]]) ?? []
+            done(Set(list.compactMap { c in
+                guard let n = c["name"] as? String, let dm = c["domain"] as? String, let p = c["path"] as? String else { return nil }
+                return "\(n)|\(dm)|\(p)"
+            }))
+        }
+    }
+
     /// 自己検査用: 「利用者が Helium の中で ⌘T した」のと同じ作り方でタブを開く。
     /// createTarget() の方は Idaten 側の要求として帳簿に載せるので、取り込み経路の検査には使えない
     func createTargetAsIfFromHelium(_ url: URL) {

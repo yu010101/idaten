@@ -1,0 +1,64 @@
+{
+ "next_1": {
+  "type": "choice",
+  "choice": "cookie",
+  "probabilities": {
+   "daily": 0.11,
+   "cookie": 0.83,
+   "pairs": 0.06,
+   "devtools": 0
+  }
+ },
+ "next_2": {
+  "type": "choice",
+  "choice": "cookie",
+  "probabilities": {
+   "daily": 0.21,
+   "cookie": 0.73,
+   "pairs": 0.06,
+   "devtools": 0
+  }
+ },
+ "next_3": {
+  "type": "choice",
+  "choice": "cookie",
+  "probabilities": {
+   "daily": 0.13,
+   "cookie": 0.81,
+   "pairs": 0.06,
+   "devtools": 0
+  }
+ },
+ "claim_ab": {
+  "type": "choice",
+  "choice": "ok",
+  "probabilities": {
+   "ng": 0.04,
+   "ok": 0.96
+  }
+ },
+ "claim_ba": {
+  "type": "choice",
+  "choice": "ok",
+  "probabilities": {
+   "ng": 0,
+   "ok": 1
+  }
+ },
+ "ctrl_ab": {
+  "type": "choice",
+  "choice": "a",
+  "probabilities": {
+   "a": 1,
+   "b": 0
+  }
+ },
+ "ctrl_ba": {
+  "type": "choice",
+  "choice": "a",
+  "probabilities": {
+   "a": 1,
+   "b": 0
+  }
+ }
+}

@@ -67,13 +67,17 @@ run_chrome() {   # $1 組番号
   local prof="$OUT_DIR/chrome-profile-$1"
   rm -rf "$prof"; mkdir -p "$prof"
   write_memory_saver_prefs "$prof" 2
-  open -g -n -a "Google Chrome" --args --user-data-dir="$prof" --no-first-run --no-default-browser-check \
-    ${CHROME_EXTRA_ARGS:-} "${URLS[@]}" "$VIDEO_URL"
+  # 起動方法を chrome_ext 条件と揃える(片方だけ open、片方だけ CDP だと条件が違う)。
+  # 起動器はページの状態(読み込み完了数・動画の再生)も記録する
+  node "$ROOT/tools/bench/run_chrome.mjs" "$prof" "$((DURATION + 30))" - \
+    "${URLS[@]}" "$VIDEO_URL" > "$OUT_DIR/chrome-run-$1.json" 2>&1 &
+  local runner=$!
   sleep "$LOAD_WAIT"
-  local pid; pid=$(pgrep -f "user-data-dir=$prof" | head -1)
-  [ -n "$pid" ] || { echo "chrome pid なし(組 $1)" | tee -a "$OUT_DIR/errors.txt"; return 1; }
+  local pid
+  pid=$(python3 -c "import json; print(json.loads(open('$OUT_DIR/chrome-run-$1.json').read().splitlines()[0])['pid'])") || {
+    echo "chrome pid なし(組 $1)" | tee -a "$OUT_DIR/errors.txt"; kill "$runner" || true; return 1; }
   sample_and_summarize "$pid" "chrome-$1"
-  kill "$pid" || true
+  wait "$runner" || true
   sleep 8
 }
 
@@ -85,7 +89,7 @@ run_chrome_ext() {   # $1 組番号
   write_memory_saver_prefs "$prof" 2
   # Extensions.loadUnpacked で入れた拡張は**その起動の間しか残らない**(実測 2026-09-23:
   # 準備してから開き直すと拡張のターゲットが消えていた)。同じプロセスの中で「入れる→開く→測り終わるまで生かす」
-  node "$ROOT/tools/bench/run_chrome_ext.mjs" "$prof" "$ROOT/extension" "$((LOAD_WAIT + DURATION + 30))" \
+  node "$ROOT/tools/bench/run_chrome.mjs" "$prof" "$((DURATION + 30))" "$ROOT/extension" \
     "${URLS[@]}" "$VIDEO_URL" > "$OUT_DIR/chromeext-run-$1.json" 2>&1 &
   local runner=$!
   sleep "$LOAD_WAIT"
@@ -95,8 +99,8 @@ run_chrome_ext() {   # $1 組番号
     return 1
   fi
   local pid
-  pid=$(python3 -c "import json,sys; print(json.loads(open('$OUT_DIR/chromeext-run-$1.json').read().splitlines()[0])['pid'])")
-  if [ -z "$pid" ]; then echo "chrome_ext pid なし(組 $1)" | tee -a "$OUT_DIR/errors.txt"; return 1; fi
+  pid=$(python3 -c "import json; print(json.loads(open('$OUT_DIR/chromeext-run-$1.json').read().splitlines()[0])['pid'])") || {
+    echo "chrome_ext pid なし(組 $1)" | tee -a "$OUT_DIR/errors.txt"; kill "$runner" || true; return 1; }
   sample_and_summarize "$pid" "chromeext-$1"
   wait "$runner" || true      # 起動器が自分で閉じる(最後に残ったページ数を記録する)
   sleep 8
