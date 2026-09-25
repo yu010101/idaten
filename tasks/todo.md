@@ -184,7 +184,7 @@
 - [x] Swift 版の接続先(45f7d4a): Idaten Engine.app を最優先、フォーク版は chromium-profile-idaten(初回だけ元をコピー)。
       --selftest-dock をフォーク版と Helium で同条件実行し結果が完全一致。**未導入**(~/Applications/Idaten Engine.app は置いていない)。
       導入するとログイン(Cookie)はやり直し(キーチェーンの鍵が別)。本人判断待ち
-- [ ] 窓の重ね合わせが内容領域より上に 70px ずれる(dockChromiumWindow=true。Helium でも同じ。以前は完全一致だった)→ 別途調査
+- [x] 「70px ずれ」は**誤報**。b97a995 の意図した動き(Helium のツールバーを Idaten のツールバーの裏に隠す)で、自己検査の期待値が古かった。検査を直し、フォーク版・Helium とも match、対照(重ねない)は不一致
 - [x] 下ごしらえ: フォークのブランチ `idaten`(31ab862)
       - `patches/idaten/macos/idaten-branding.patch`: 名前 Idaten / バンドルID・プロファイル置き場 `dev.idaten.chromium` / キーチェーン `Idaten Storage Key`
         (本物の Helium とプロファイル・キーチェーンを共有しないため)。同じ3ファイルに触る6本を series の順で当てて最終値まで確認
