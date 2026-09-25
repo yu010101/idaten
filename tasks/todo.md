@@ -155,7 +155,47 @@
   → **Macを借りる必要も外付けSSDも不要。公開リポジトリならランナーは無料**
 - [x] フォーク作成: yu010101/helium-macos・yu010101/helium。main を arm64 のみに変更(x86_64 は作らない)
 - [x] 無改造のビルドを起動(run 35807801715, macos-latest, arm64)。まず「フォークでも完走するか」を確かめる
-- [ ] 完走したら Idaten の変更(タブ休眠の予算制・名前とアイコン)を quilt パッチで載せる。拡張版(`extension/`)はそのまま同梱できる
+      → 失敗。build_job_01 で sccache が「gha cache の URL が無い」で起動できず全コンパイルが落ちた
+- [~] sccache をローカルディスクのキャッシュにして再実行(run 35810642178)。09-23 15:49 時点で build_job_01 が
+      3時間47分走行中(落ちていない)。1ジョブ6時間で切れて次のジョブへ引き継ぐ作り。完走は未確認
+- [x] run 35810642178 は 09-23 19:4x に本人承認で取り消し。最後の梱包で落ちる見込みだった(19:20 判明)。`github_prepare_artifacts.sh` が証明書の有無を見ずに
+      `security import` する。空の p12 の import は rc=1(一時キーチェーンで実測)で、`bash -e` により止まり、成果物のアップロードも行われない
+- [~] `idaten` ブランチ(31ab862)で名前・アイコン入りのビルドを起動(run 35861397971、09-23 19:4x)。sanity 合格(全パッチ適用・offset なし・gn gen 成功)を確認してから
+- [!] **run 35861397971 は終わらない**(09-24 08:50 判明)。siso が時間切れの打ち切り後、次の段で前の段の成果物をほぼ全部作り直す
+      (2段目のコンパイル 19,750 個のうち 17,306 個が1段目と同じ)。段ごとに約2千個しか進まず、10段(上限)では 8.4万個に届かない
+- [~] 修正(1da4977): sccache のキャッシュ(2段目の終わりで 1GiB)もビルド途中のファイルと一緒に段から段へ渡す。
+      (run 35935724048 は下準備の段階で取り消し)**2段目のログで Cache hits が数千〜万単位になっていれば効いている**。未確認
+- [~] **真因の最有力(Codex 指摘・手元で実証)**: 既定の tar 形式が更新時刻の1秒未満を切り捨て、siso がナノ秒で照合して全部作り直していた。
+      f950834 で `tar --format=pax`(pax+zstd+展開の往復でナノ秒一致を確認)+ pipefail。run 35936651056 で検証中(09-24 09:1x 起動)。
+      判定: 2段目で「1段目で完了した部品の作り直し」がほぼ0になるか / Cache hits。run 35861397971 は Codex の推奨で取り消し
+- macmini-m4: Xcode は ~/Applications に2つあるが未選択(xcode-select は CommandLineTools)。**空き 18GB に減少中**(09-23 32GB → 09-24 18GB)
+- [x] **フォーク版 Idaten のビルドが完走**(run 35936651056、f950834、09-25 13:36)。7ジョブ・作り直し0。dmg 112.4MB(sha256 9694…2aaa、hashes.md と一致)
+      → `~/idaten-fork/dist/Idaten.app`(344MB、アドホック署名し直して codesign --verify --deep --strict 合格)
+      実機確認(09-25 21:4x): CFBundleName/Display=Idaten・ID dev.idaten.chromium・メニューバーのアプリ名=Idaten・アイコン=Idaten・
+      プロファイルは `~/Library/Application Support/dev.idaten.chromium` に新規作成、`net.imput.helium` は起動前後で不変(ls -laR の sha 一致)・
+      キーチェーンは「Idaten Storage Key」で別。Sparkle は同梱されていない
+      **未解決**: アプリメニューの項目は「Helium について」「Helium を隠す」「Helium を終了」のまま(Helium の文言置換)。拡張の動作は未確認。
+      Swift 版 Idaten.app と同名(ID は別)なので ~/Applications には入れていない
+- [~] アプリメニューの「Helium について/を隠す/を終了」→ `patches/idaten/core/idaten-product-name.patch`(641533c)。
+      IDS_PRODUCT_NAME / IDS_SHORT_PRODUCT_NAME / IDS_APP_MENU_PRODUCT_NAME(3つとも translateable=false)を Idaten に。
+      sanity 合格(run 36136887906)。ビルド run 36138082313 を 09-25 起動(約1日)
+- [x] フォーク版で拡張が動く(09-25): 拡張入りプロファイルの**コピー**で起動し、CDP で service worker を確認。
+      Claude・OneTab・Stylus・1Password・GoFullPage・Evernote 等 + uBO(component)が起動、wikipedia.org 表示可
+- [x] Swift 版の接続先(45f7d4a): Idaten Engine.app を最優先、フォーク版は chromium-profile-idaten(初回だけ元をコピー)。
+      --selftest-dock をフォーク版と Helium で同条件実行し結果が完全一致。**未導入**(~/Applications/Idaten Engine.app は置いていない)。
+      導入するとログイン(Cookie)はやり直し(キーチェーンの鍵が別)。本人判断待ち
+- [ ] 窓の重ね合わせが内容領域より上に 70px ずれる(dockChromiumWindow=true。Helium でも同じ。以前は完全一致だった)→ 別途調査
+- [x] 下ごしらえ: フォークのブランチ `idaten`(31ab862)
+      - `patches/idaten/macos/idaten-branding.patch`: 名前 Idaten / バンドルID・プロファイル置き場 `dev.idaten.chromium` / キーチェーン `Idaten Storage Key`
+        (本物の Helium とプロファイル・キーチェーンを共有しないため)。同じ3ファイルに触る6本を series の順で当てて最終値まで確認
+      - アイコン: Idaten の AppIcon.icns から actool で Assets.car(AppIcon/Icon)と app.icns を生成
+      - 梱包: 証明書が無いときはキーチェーンを作らない / Sparkle の差分は作らない / アプリ名は `resources/product_name.txt`
+      - Sparkle はフォークに鍵が無いのでビルドされない → 本家 Helium に「更新」されて置き換わる心配はない
+      - lint 合格。sanity(本物の Chromium にパッチを当てて gn まで)は実行中
+- 休眠拡張の同梱は Chromium の C++ パッチにしない(uBO 方式は9ファイル・手元でコンパイル確認できない)。
+  Idaten 本体が CDP の `Extensions.loadUnpacked` で起動のたびに読み込む方式にする
+- 既知の制約: 設定画面などの文言は「Helium」のまま(Helium の name_substitution が翻訳IDと連動しているので触らない)
+- キャッシュは次の実行へ引き継がれない(sccache をランナーの一時ディスクに置いているだけ)。**毎回約14時間のフルビルド**
 - [ ] 1Password 連携は Developer ID 署名が要る(アドホック署名では不可)
 ### (旧案・保留) M4 mini + 外付けSSD / クラウドMac
 - 実測(09-22): このMac 空き24GiB・外付けなし / macmini-m4 = M4・24GB RAM・空き51GB・**brew も Xcode も無し** /
@@ -208,6 +248,9 @@
 ### 計測
 - [x] 第1版(12ページ・3回): 放置60秒後の中央値で Chrome 104プロセス 6,250 MiB / Idaten 11プロセス 881 MiB
 - [x] 第2版: 観測点60s/300s/900s・区間中央値とピーク・固定動画・両者とも新品プロファイル・順序効果の相殺
+- [~] bench4(09-23 15:03、`measurements/bench4-ext-150306`)は **4組中3組目の途中で止まった**(idaten-3 が空)。
+      拡張は3組とも生きていた(workerAlive)が、**動画が読み込み時点で再生されていたのは3組目だけ**
+      (1・2組目は playing:false)→ 条件がそろっていないので結論には使わない。参考値(300s中央値): Chrome+拡張 2,701〜3,694 MiB / Idaten 259〜579 MiB
 - [ ] **chrome_ext 条件はやり直しが必要**。CDP で入れた拡張は起動し直すと消えるため、
       測っていたのは実質「拡張なしの Chrome」だった(実測で確認)。同じプロセス内で
       「入れる→開く→測り終わるまで生かす」形に作り直し済み(run_chrome_ext.mjs)。拡張が動いていることを確かめてから測る
