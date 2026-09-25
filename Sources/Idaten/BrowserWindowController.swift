@@ -2043,7 +2043,15 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
                 then(); return
             }
             dock.windowBounds(id) { [self] b in
-                report[key] = ["expected": rect(dockRect()), "actual": b ?? [:], "hole": root.hole.map { rect($0) } ?? [:],
+                // 窓は内容領域より Helium 自身のタブバー+ツールバーの分だけ上へ伸ばし、Idaten のツールバーの裏に隠す
+                // (ChromiumDock.place)。期待値もその分を足す。以前はこれを足しておらず、正しい位置を「ずれ」と報告していた
+                let inset = dock.measuredChromeInset(id) ?? 0
+                let area = dockRect()
+                let want = rect(CGRect(x: area.minX, y: area.minY - inset, width: area.width, height: area.height + inset))
+                let got = (b ?? [:]).compactMapValues { ($0 as? NSNumber)?.intValue }
+                let match = ["left", "top", "width", "height"].allSatisfy { got[$0] == want[$0] }
+                report[key] = ["expected": want, "contentArea": rect(area), "chromeInset": Int(inset.rounded()), "match": match,
+                               "actual": b ?? [:], "hole": root.hole.map { rect($0) } ?? [:],
                                "tabs": tabs.count, "title": t.title, "url": t.url?.absoluteString ?? ""]
                 then()
             }

@@ -390,6 +390,9 @@ final class ChromiumDock {
         }
     }
 
+    /// 自己検査用: そのタブで測った Helium 自身のタブバー+ツールバーの高さ(まだ測っていなければ nil)
+    func measuredChromeInset(_ id: String) -> CGFloat? { chromeInset[id] }
+
     /// 自己検査用: そのタブの窓の現在位置(CDPの座標系)
     func windowBounds(_ id: String, _ done: @escaping ([String: Any]?) -> Void) {
         guard let cdp else { done(nil); return }
