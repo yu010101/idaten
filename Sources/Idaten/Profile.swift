@@ -87,7 +87,7 @@ enum ProfileStore {
         }
         let legacyChromiumProfile = Paths.support.appendingPathComponent("chromium-profile", isDirectory: true)
         if FileManager.default.fileExists(atPath: legacyChromiumProfile.path) {
-            try? FileManager.default.moveItem(at: legacyChromiumProfile, to: paths.chromiumProfile)
+            try? FileManager.default.moveItem(at: legacyChromiumProfile, to: paths.chromiumProfileHelium)
         }
     }
 }
@@ -120,6 +120,28 @@ struct ProfilePaths {
         if let override = ProcessInfo.processInfo.environment["IDATEN_CHROMIUM_PROFILE"], !override.isEmpty {
             return URL(fileURLWithPath: override, isDirectory: true)
         }
-        return dir.appendingPathComponent("chromium-profile", isDirectory: true)
+        guard ChromiumProcessEngine.activeIsFork() else { return chromiumProfileHelium }
+        // フォーク版はキーチェーンの鍵が Helium と別で、同じプロファイルを開くとログインが読めなくなる(戻したときも同じ)。
+        // 別の場所を使い、初回だけ元をコピーする(拡張・ブックマーク・履歴は引き継ぎ、ログインだけやり直し)。元は触らない
+        let forked = dir.appendingPathComponent("chromium-profile-idaten", isDirectory: true)
+        let fm = FileManager.default
+        if !fm.fileExists(atPath: forked.path) {
+            if fm.fileExists(atPath: chromiumProfileHelium.path) {
+                do {
+                    try fm.copyItem(at: chromiumProfileHelium, to: forked)
+                    for lock in ["SingletonLock", "SingletonCookie", "SingletonSocket", "DevToolsActivePort"] {
+                        try? fm.removeItem(at: forked.appendingPathComponent(lock))
+                    }
+                } catch {
+                    NSLog("Idaten: chromium-profile のコピーに失敗(空のプロファイルで始める): \(error)")
+                    try? fm.removeItem(at: forked)
+                }
+            }
+        }
+        return forked
+    }
+    /// Helium / Brave / Chrome 用(フォーク版より前からある場所)
+    var chromiumProfileHelium: URL {
+        dir.appendingPathComponent("chromium-profile", isDirectory: true)
     }
 }

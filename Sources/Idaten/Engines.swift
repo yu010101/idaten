@@ -53,7 +53,15 @@ final class EngineRules {
 final class ChromiumProcessEngine {
     struct Candidate: Codable { var name: String; var appPath: String }
 
+    /// フォーク版(yu010101/helium-macos の idaten ブランチ)。名前・メニューバー・アイコンが Idaten になる。
+    /// Swift 版 Idaten.app と同じ表示名なので、置き場所のフォルダ名だけ「Idaten Engine.app」にする
+    static let forkCandidate = Candidate(name: "Idaten Engine", appPath: "/Applications/Idaten Engine.app")
+    /// フォーク版のバンドルID。キーチェーンの鍵(Idaten Storage Key)が Helium と別なので、
+    /// 同じ --user-data-dir を開くとログイン(Cookie)が読めない → プロファイルを分ける(ProfilePaths.chromiumProfile)
+    static let forkBundleID = "dev.idaten.chromium"
+
     static let defaultCandidates = [
+        forkCandidate,
         Candidate(name: "Helium", appPath: "/Applications/Helium.app"),
         Candidate(name: "Brave", appPath: "/Applications/Brave Browser.app"),
         Candidate(name: "Chrome", appPath: "/Applications/Google Chrome.app"),
@@ -69,7 +77,16 @@ final class ChromiumProcessEngine {
         self.profileDir = profileDir
         if let data = try? Data(contentsOf: Paths.engineConfig),
            let c = try? JSONDecoder().decode([Candidate].self, from: data), !c.isEmpty {
-            candidates = c
+            // フォーク版より前に書かれた engine.json には候補が無い。1回だけ先頭に足す(本人が消したら戻さない印を残す)
+            if !c.contains(where: { $0.name == Self.forkCandidate.name }) && !UserDefaults.standard.bool(forKey: "forkCandidateMigrated") {
+                candidates = [Self.forkCandidate] + c
+                let enc = JSONEncoder()
+                enc.outputFormatting = [.prettyPrinted, .withoutEscapingSlashes]
+                if let data = try? enc.encode(candidates) { try? data.write(to: Paths.engineConfig, options: .atomic) }
+            } else {
+                candidates = c
+            }
+            UserDefaults.standard.set(true, forKey: "forkCandidateMigrated")
         } else {
             candidates = Self.defaultCandidates
             let enc = JSONEncoder()
@@ -93,6 +110,21 @@ final class ChromiumProcessEngine {
             }
         }
         return nil
+    }
+
+    /// 今起動するのがフォーク版か(= Idaten のキーチェーンを使うか)。engine.json と実在するアプリから決める
+    static func activeIsFork() -> Bool {
+        var list = defaultCandidates
+        if let data = try? Data(contentsOf: Paths.engineConfig),
+           let c = try? JSONDecoder().decode([Candidate].self, from: data), !c.isEmpty { list = c }
+        for c in list {
+            for path in [c.appPath, c.appPath.replacingOccurrences(of: "/Applications/", with: NSHomeDirectory() + "/Applications/")] {
+                if let b = Bundle(path: path), let exe = b.executableURL, FileManager.default.isExecutableFile(atPath: exe.path) {
+                    return b.bundleIdentifier == forkBundleID
+                }
+            }
+        }
+        return false
     }
 
     func flags() -> [String] {

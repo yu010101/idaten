@@ -6,6 +6,12 @@ import Foundation
 /// `ProfilePaths`(Profile.swift)を使う
 enum Paths {
     static let support: URL = {
+        // 検査で本人の設定(engine.json 等)を書き換えないよう、置き場所ごと差し替えられるようにする
+        if let o = ProcessInfo.processInfo.environment["IDATEN_SUPPORT_DIR"], !o.isEmpty {
+            let dir = URL(fileURLWithPath: o, isDirectory: true)
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            return dir
+        }
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         let dir = base.appendingPathComponent("Idaten", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
