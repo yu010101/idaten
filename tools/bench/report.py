@@ -51,8 +51,12 @@ def main(out_dir: str) -> None:
         print("| | 中央値 MiB | 最小 | 最大 |")
         print("|---|---|---|---|")
         rows = [("Chrome", chrome_vals), ("Idaten", idaten_vals), ("差(Chrome − Idaten)", diffs)]
+        fork_vals = [data[("forkext", p)][point][0] for p in pairs
+                     if ("forkext", p) in data and point in data[("forkext", p)]]
         if ext_vals:
             rows.insert(2, ("Chrome + 同じ休眠拡張", ext_vals))
+        if fork_vals:
+            rows.insert(2, ("フォーク版 Idaten + 同じ休眠拡張", fork_vals))
         for label, vals in rows:
             print(f"| {label} | {statistics.median(vals):.0f} | {min(vals):.0f} | {max(vals):.0f} |")
         ratios = [c / i for c, i in zip(chrome_vals, idaten_vals) if i > 0]

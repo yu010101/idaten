@@ -21,6 +21,8 @@ CONDITIONS="${CONDITIONS:-chrome idaten chrome_ext}"   # chrome_ext = Chrome に
 SCENARIO="${SCENARIO:-normal}"
 VIDEO_PORT="${VIDEO_PORT:-8899}"
 mkdir -p "$OUT_DIR"
+# フォーク版 Idaten(Chromium)の実行ファイル。fork_ext 条件で使う
+FORK_BIN="${FORK_BIN:-$HOME/idaten-fork/dist/Idaten.app/Contents/MacOS/Idaten}"
 
 URLS_FILE="$ROOT/tools/bench/urls.txt"
 [ "$SCENARIO" = "heavy" ] && URLS_FILE="$ROOT/tools/bench/urls_heavy.txt"
@@ -44,6 +46,7 @@ stop_video_server() { pkill -f "http.server $VIDEO_PORT" || true; }
   echo "観測点: 60s(直前30秒の中央値) / 300s / 900s、全期間1秒間隔"
   echo "機械: $(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo '不明') / $(( $(sysctl -n hw.memsize) / 1073741824 ))GB / macOS $(sw_vers -productVersion)"
   echo "Chrome: $(defaults read '/Applications/Google Chrome.app/Contents/Info.plist' CFBundleShortVersionString 2>/dev/null || echo '不明')"
+  echo "フォーク版: $(defaults read "$(dirname "$(dirname "$FORK_BIN")")/Info.plist" CFBundleShortVersionString 2>&1) ($FORK_BIN)"
   for app in "Google Chrome" Helium Idaten; do
     pgrep -x "$app" > /dev/null && echo "注意: $app が既に動いている(機械全体の負荷を共有する)"
   done
@@ -106,6 +109,28 @@ run_chrome_ext() {   # $1 組番号
   sleep 8
 }
 
+# フォーク版 Idaten(Chromium)に同じ休眠拡張を入れた条件。「1つのアプリにする」案のメモリを見る。
+# 起動と拡張の入れ方は chrome_ext と同じ(BROWSER_BIN だけ差し替える)
+run_fork_ext() {   # $1 組番号
+  local prof="$OUT_DIR/forkext-profile-$1"
+  rm -rf "$prof"; mkdir -p "$prof"
+  write_memory_saver_prefs "$prof" 2
+  BROWSER_BIN="$FORK_BIN" node "$ROOT/tools/bench/run_chrome.mjs" "$prof" "$((DURATION + 30))" "$ROOT/extension" \
+    "${URLS[@]}" "$VIDEO_URL" > "$OUT_DIR/forkext-run-$1.json" 2>&1 &
+  local runner=$!
+  sleep "$LOAD_WAIT"
+  if ! grep -q '"workerAlive":true' "$OUT_DIR/forkext-run-$1.json"; then
+    echo "拡張が動いていない(フォーク版・組 $1) — この条件は中止" | tee -a "$OUT_DIR/errors.txt"
+    kill "$runner" || true
+    return 1
+  fi
+  local pid
+  pid=$(python3 -c "import json; print(json.loads(open('$OUT_DIR/forkext-run-$1.json').read().splitlines()[0])['pid'])") || {
+    echo "fork_ext pid なし(組 $1)" | tee -a "$OUT_DIR/errors.txt"; kill "$runner" || true; return 1; }
+  sample_and_summarize "$pid" "forkext-$1"
+  wait "$runner" || true
+  sleep 8
+}
 run_idaten() {   # $1 組番号
   local dir="$OUT_DIR/idaten-$1"
   mkdir -p "$dir"
@@ -133,6 +158,7 @@ for i in $(seq 1 "$PAIRS"); do
       chrome) run_chrome "$i" || true ;;
       idaten) run_idaten "$i" || true ;;
       chrome_ext) run_chrome_ext "$i" || true ;;
+      fork_ext) run_fork_ext "$i" || true ;;
     esac
   done
 done

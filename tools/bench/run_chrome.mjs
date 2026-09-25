@@ -14,7 +14,8 @@ if (!profile || !seconds || !extDir || urls.length === 0) {
   console.error('使い方: node run_chrome.mjs <profile> <秒> <extDir|-> <url...>');
   process.exit(2);
 }
-const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+// BROWSER_BIN で別の Chromium(フォーク版 Idaten など)を同じ手順で測れるようにする
+const CHROME = process.env.BROWSER_BIN || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const args = [
   `--user-data-dir=${profile}`, '--remote-debugging-pipe', '--no-first-run', '--no-default-browser-check',
 ];
