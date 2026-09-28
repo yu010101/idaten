@@ -271,3 +271,32 @@
 
 ## レビュー
 (未記入)
+
+## 2026-09-28 休眠組み込み版(run 36224944478)の検証
+- [x] DMG の SHA256 がビルド公表値と一致(8c3b722a…)。名前 Idaten / dev.idaten.chromium / 0.17.2.2、メニュー修正を含む
+- [x] resources.pak に拡張5ファイル。background/policy/options.html/options.js は元とバイト一致、manifest は key 追加分だけ違う
+- [x] M4 で新規プロファイル起動 → 拡張の service worker が自動起動(permissions: tabs/storage/alarms/scripting)
+- [x] 背景タブ10枚 → 1分巡回で4枚休眠・起きている背景6枚(=既定 budget 6)。failed 0。**1回・1台の結果**
+- [ ] busy が 5 と多い(読み込み中/3秒打ち切りで busy 扱い)。予算は守れたが原因は未確認
+- [x] idle 10分: 背景3枚(予算内)を放置 → 06:17:21 最終閲覧の2枚が 06:28:21 の巡回で休眠。選択中タブと about:blank は規則どおり対象外。1回・1台
+- [ ] Developer ID 署名(現状 adhoc → spctl rejected)
+- 検査の罠: ssh から直に起動するとキーチェーンに触れず NSAlert で固まる。`open -n -g … --args` で起動する
+- 気づき: crashpad の送信先は https://crash.helium.computer。ただし既定は kAsk(毎回ダイアログで聞き、押さない限り送らない)。
+  「Helium 側に送られる」は言い過ぎだった。既定を kDisabled にする1行パッチを次のビルドに同乗させる案
+- 検査スクリプト: M4 ~/idaten-test/hib_test.mjs / ログ run3.log
+- [x] 負荷テスト(M4・1回): 実サイト12種×5=60タブを1秒ごとに開く → 開く失敗0・クラッシュ0・ブラウザ生存。
+      開いている最中は起きている背景タブが最大12(予算6を一時超過)、開き終えて約30秒で6に収束し以後維持(54枚休眠)。
+      メモリ(Idaten 全プロセスの RSS 合計)最大 4,322MB → 落ち着いて約3,050MB → 休眠タブ20枚を2秒おきに切替後 約2,600MB。
+      CDP 応答 最大9ms・拡張の応答 最大6ms。Chrome との比較はしていない(別シナリオなので過去の 4,985MB とは比べない)
+- [ ] busy は開き終えた後も常に5(loading 0)。起きている背景6枚のうち5枚が「再生中 or 応答なし」判定 → 自動再生の広告動画の可能性(未確認)。
+      予算は守れるが、その5枚は「10分放置で眠る」の対象から外れ続ける
+- 記録: measurements/load-20260928/
+
+## 2026-09-28 本人判断: WebKit タブ(Chromium フォーク内)の大改造は「3〜4割軽い」なら検討、未満ならやめる
+- 計測: 09-29 02:00 開始の bench6(measurements/bench6-webkit-20260929-0200)。条件 chrome / idaten(WebKit)/ helium / forkhib(休眠組み込み版)、5組
+- **判定の式(事前に固定)**: 観測点 300s の各組の中央値 MiB で、軽さ = (forkhib − idaten) ÷ forkhib。5組の中央値で
+  - 30% 以上 → 試作を検討する(PoC 1.5〜3K 行。docs/one-browser/webkit-in-chromium-2026-09-28.md)
+  - 30% 未満 → 大改造はやめ、「メモリ予算」とタブ数・メモリの見える化に振る
+- **無効条件**: どちらかの条件で、動画(video.html)の再生が確認できない回がある(state.jsonl の video / run の videoPlaying)、
+  または forkhib で組み込み拡張(aacggnjhnfocojdoneibokaddkjnmghn)が起きていない回がある → その組は判定から外す。有効な組が3未満なら判定しない
+- 注意: WebKit タブは拡張・Cookie 共有が効かない(乗り換えの最大の壁 0.42〜0.65 が戻る)。軽さだけで決めてよいかは結果を見て本人と再確認
