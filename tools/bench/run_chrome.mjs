@@ -67,7 +67,10 @@ await sleep(6000);
 
 const targets0 = (await send('Target.getTargets', { filter: [{}] })).result?.targetInfos ?? [];
 workerAlive = extensionId ? targets0.some(t => (t.url || '').includes(extensionId)) : false;
-console.log(JSON.stringify({ pid: p.pid, extensionId, workerAlive, pages: targets0.filter(t => t.type === 'page').length }));
+// 組み込み拡張(フォーク版の休眠拡張など)も動いているかを残す
+const extWorkers = [...new Set(targets0.filter(t => t.type === 'service_worker' && (t.url || '').startsWith('chrome-extension://'))
+  .map(t => t.url.split('/')[2]))];
+console.log(JSON.stringify({ pid: p.pid, extensionId, workerAlive, extWorkers, pages: targets0.filter(t => t.type === 'page').length }));
 
 // 動画が本当に再生されているか / 各ページが読み終わったかを、ページの中から確かめる
 async function inspect() {
@@ -80,8 +83,10 @@ async function inspect() {
     if (!s) continue;
     const res = await send('Runtime.evaluate', {
       expression: `(() => { const v = document.querySelector('video');
-        return JSON.stringify({ ready: document.readyState, playing: v ? (!v.paused && !v.ended && v.currentTime > 0) : null,
-                                t: v ? Math.round(v.currentTime) : null }); })()`,
+        return JSON.stringify({ url: location.href, ready: document.readyState, vis: document.visibilityState,
+                                playing: v ? (!v.paused && !v.ended && v.currentTime > 0) : null,
+                                t: v ? Math.round(v.currentTime) : null, rs: v ? v.readyState : null,
+                                err: v && v.error ? v.error.code : null }); })()`,
       returnByValue: true,
     }, s);
     await send('Target.detachFromTarget', { sessionId: s });
@@ -89,7 +94,8 @@ async function inspect() {
     if (!v) continue;
     const info = JSON.parse(v);
     if (info.ready === 'complete') loaded++;
-    if (info.playing !== null) videoPlaying = { playing: info.playing, currentTime: info.t };
+    // 動画の判定は計測用の動画ページだけで行う(他のタブの <video> で上書きしない)
+    if ((info.url || '').endsWith('/video.html')) videoPlaying = { playing: info.playing, currentTime: info.t, vis: info.vis, rs: info.rs, err: info.err };
   }
   return { pages: pages.length, loaded, videoPlaying };
 }

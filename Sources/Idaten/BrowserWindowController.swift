@@ -1771,16 +1771,22 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
             guard let self else { return }
             var loaded = 0
             var videoPlaying: Bool?
+            var videoDetail: [String: Any]?
             let group = DispatchGroup()
             for tab in self.tabs {
                 guard let wv = tab.webView else { continue }
                 group.enter()
-                wv.evaluateJavaScript("(() => { const v = document.querySelector('video'); return JSON.stringify({ready: document.readyState, playing: v ? (!v.paused && !v.ended && v.currentTime > 0) : null}); })()") { value, _ in
+                // 動画の判定は計測用の動画ページ(video.html)だけで行う。以前は全タブに聞いて最後に返ってきた値で
+                // 上書きしており、他のタブの止まった <video> を拾いうる作りだった(09-26 の調査)。失敗理由も残す
+                wv.evaluateJavaScript("(() => { const v = document.querySelector('video'); return JSON.stringify({url: location.href, ready: document.readyState, vis: document.visibilityState, playing: v ? (!v.paused && !v.ended && v.currentTime > 0) : null, t: v ? v.currentTime : null, paused: v ? v.paused : null, rs: v ? v.readyState : null, ns: v ? v.networkState : null, err: v && v.error ? v.error.code : null}); })()") { value, _ in
                     defer { group.leave() }
                     guard let s = value as? String, let d = s.data(using: .utf8),
                           let info = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return }
                     if info["ready"] as? String == "complete" { loaded += 1 }
-                    if let playing = info["playing"] as? Bool { videoPlaying = playing }
+                    if (info["url"] as? String)?.hasSuffix("/video.html") == true {
+                        videoPlaying = info["playing"] as? Bool
+                        videoDetail = info
+                    }
                 }
             }
             group.notify(queue: .main) {
@@ -1791,6 +1797,7 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
                     "hibernated": self.tabs.filter { $0.isHibernated }.count,
                     "loaded": loaded,
                     "videoPlaying": videoPlaying as Any,
+                    "video": videoDetail as Any,
                     "adBlockEnabled": self.settings.adBlockEnabled,
                     "hibernateMinutes": self.settings.hibernateMinutes,
                 ]

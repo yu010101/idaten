@@ -57,6 +57,10 @@ def main(out_dir: str) -> None:
             rows.insert(2, ("Chrome + 同じ休眠拡張", ext_vals))
         if fork_vals:
             rows.insert(2, ("フォーク版 Idaten + 同じ休眠拡張", fork_vals))
+        for key, label in [("forkhib", "フォーク版 Idaten(休眠拡張を組み込み)"), ("helium", "Helium(素)")]:
+            vals = [data[(key, p)][point][0] for p in pairs if (key, p) in data and point in data[(key, p)]]
+            if vals:
+                rows.insert(2, (label, vals))
         for label, vals in rows:
             print(f"| {label} | {statistics.median(vals):.0f} | {min(vals):.0f} | {max(vals):.0f} |")
         ratios = [c / i for c, i in zip(chrome_vals, idaten_vals) if i > 0]

@@ -23,6 +23,10 @@ VIDEO_PORT="${VIDEO_PORT:-8899}"
 mkdir -p "$OUT_DIR"
 # フォーク版 Idaten(Chromium)の実行ファイル。fork_ext 条件で使う
 FORK_BIN="${FORK_BIN:-$HOME/idaten-fork/dist/Idaten.app/Contents/MacOS/Idaten}"
+# 休眠拡張を組み込んだフォーク版(component。拡張ID は manifest の key から決まる)と、素の Helium
+HIB_BIN="${HIB_BIN:-$HOME/idaten-fork/dist/hibernate-36224944478/Idaten.app/Contents/MacOS/Idaten}"
+HIB_EXT_ID="aacggnjhnfocojdoneibokaddkjnmghn"
+HELIUM_BIN="${HELIUM_BIN:-$HOME/Applications/Helium.app/Contents/MacOS/Helium}"
 
 URLS_FILE="$ROOT/tools/bench/urls.txt"
 [ "$SCENARIO" = "heavy" ] && URLS_FILE="$ROOT/tools/bench/urls_heavy.txt"
@@ -32,17 +36,20 @@ while IFS= read -r line; do URLS+=("$line"); done < <(grep -vE '^[[:space:]]*(#|
 # 動画は手元で配信する。同じファイル・同じ自動再生・同じループで、両ブラウザに同じ負荷をかける
 VIDEO_DIR="$ROOT/tools/bench/video"
 VIDEO_URL="http://127.0.0.1:$VIDEO_PORT/video.html"
+# NO_VIDEO=1: 動画タブを外す(Swift 版で動画が再生されず条件が揃わなかったため。2026-09-28)
+NO_VIDEO="${NO_VIDEO:-0}"
+VIDEO_ARGS=("$VIDEO_URL"); [ "$NO_VIDEO" = 1 ] && VIDEO_ARGS=()
 start_video_server() {
   [ -f "$VIDEO_DIR/sample.mp4" ] || { echo "動画が無い: $VIDEO_DIR/sample.mp4 (tools/bench/make_video.sh で作る)"; return 1; }
-  (cd "$VIDEO_DIR" && nohup python3 -m http.server "$VIDEO_PORT" --bind 127.0.0.1 > "$OUT_DIR/video-server.log" 2>&1 &)
+  (cd "$VIDEO_DIR" && nohup python3 "$ROOT/tools/bench/range_server.py" "$VIDEO_PORT" > "$OUT_DIR/video-server.log" 2>&1 &)
   sleep 1
   curl -fsS "$VIDEO_URL" -o /dev/null || { echo "動画サーバが立たない"; return 1; }
 }
-stop_video_server() { pkill -f "http.server $VIDEO_PORT" || true; }
+stop_video_server() { pkill -f "range_server.py $VIDEO_PORT" || true; }
 
 {
   echo "日時: $(date '+%F %T')"
-  echo "シナリオ: $SCENARIO / URL ${#URLS[@]} 件 + 動画1 / 組数 $PAIRS / 読み込み待ち ${LOAD_WAIT}s"
+  echo "シナリオ: $SCENARIO / URL ${#URLS[@]} 件 + 動画${#VIDEO_ARGS[@]} / 組数 $PAIRS / 読み込み待ち ${LOAD_WAIT}s"
   echo "観測点: 60s(直前30秒の中央値) / 300s / 900s、全期間1秒間隔"
   echo "機械: $(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo '不明') / $(( $(sysctl -n hw.memsize) / 1073741824 ))GB / macOS $(sw_vers -productVersion)"
   echo "Chrome: $(defaults read '/Applications/Google Chrome.app/Contents/Info.plist' CFBundleShortVersionString 2>/dev/null || echo '不明')"
@@ -73,7 +80,7 @@ run_chrome() {   # $1 組番号
   # 起動方法を chrome_ext 条件と揃える(片方だけ open、片方だけ CDP だと条件が違う)。
   # 起動器はページの状態(読み込み完了数・動画の再生)も記録する
   node "$ROOT/tools/bench/run_chrome.mjs" "$prof" "$((DURATION + 30))" - \
-    "${URLS[@]}" "$VIDEO_URL" > "$OUT_DIR/chrome-run-$1.json" 2>&1 &
+    "${URLS[@]}" ${VIDEO_ARGS[@]+"${VIDEO_ARGS[@]}"} > "$OUT_DIR/chrome-run-$1.json" 2>&1 &
   local runner=$!
   sleep "$LOAD_WAIT"
   local pid
@@ -93,7 +100,7 @@ run_chrome_ext() {   # $1 組番号
   # Extensions.loadUnpacked で入れた拡張は**その起動の間しか残らない**(実測 2026-09-23:
   # 準備してから開き直すと拡張のターゲットが消えていた)。同じプロセスの中で「入れる→開く→測り終わるまで生かす」
   node "$ROOT/tools/bench/run_chrome.mjs" "$prof" "$((DURATION + 30))" "$ROOT/extension" \
-    "${URLS[@]}" "$VIDEO_URL" > "$OUT_DIR/chromeext-run-$1.json" 2>&1 &
+    "${URLS[@]}" ${VIDEO_ARGS[@]+"${VIDEO_ARGS[@]}"} > "$OUT_DIR/chromeext-run-$1.json" 2>&1 &
   local runner=$!
   sleep "$LOAD_WAIT"
   if ! grep -q '"workerAlive":true' "$OUT_DIR/chromeext-run-$1.json"; then
@@ -116,7 +123,7 @@ run_fork_ext() {   # $1 組番号
   rm -rf "$prof"; mkdir -p "$prof"
   write_memory_saver_prefs "$prof" 2
   BROWSER_BIN="$FORK_BIN" node "$ROOT/tools/bench/run_chrome.mjs" "$prof" "$((DURATION + 30))" "$ROOT/extension" \
-    "${URLS[@]}" "$VIDEO_URL" > "$OUT_DIR/forkext-run-$1.json" 2>&1 &
+    "${URLS[@]}" ${VIDEO_ARGS[@]+"${VIDEO_ARGS[@]}"} > "$OUT_DIR/forkext-run-$1.json" 2>&1 &
   local runner=$!
   sleep "$LOAD_WAIT"
   if ! grep -q '"workerAlive":true' "$OUT_DIR/forkext-run-$1.json"; then
@@ -131,11 +138,33 @@ run_fork_ext() {   # $1 組番号
   wait "$runner" || true
   sleep 8
 }
+# 拡張を入れずに起動する条件(素の Helium / 休眠拡張を組み込んだフォーク版)。
+# $1 組番号 $2 名前 $3 実行ファイル $4 動いていてほしい組み込み拡張のID(無ければ -)
+run_plain() {
+  local prof="$OUT_DIR/$2-profile-$1"
+  rm -rf "$prof"; mkdir -p "$prof"
+  write_memory_saver_prefs "$prof" 2
+  BROWSER_BIN="$3" node "$ROOT/tools/bench/run_chrome.mjs" "$prof" "$((DURATION + 30))" - \
+    "${URLS[@]}" ${VIDEO_ARGS[@]+"${VIDEO_ARGS[@]}"} > "$OUT_DIR/$2-run-$1.json" 2>&1 &
+  local runner=$!
+  sleep "$LOAD_WAIT"
+  if [ "$4" != "-" ] && ! grep -q "$4" "$OUT_DIR/$2-run-$1.json"; then
+    echo "組み込み拡張 $4 が動いていない($2・組 $1) — この条件は中止" | tee -a "$OUT_DIR/errors.txt"
+    kill "$runner" || true
+    return 1
+  fi
+  local pid
+  pid=$(python3 -c "import json; print(json.loads(open('$OUT_DIR/$2-run-$1.json').read().splitlines()[0])['pid'])") || {
+    echo "$2 pid なし(組 $1)" | tee -a "$OUT_DIR/errors.txt"; kill "$runner" || true; return 1; }
+  sample_and_summarize "$pid" "$2-$1"
+  wait "$runner" || true
+  sleep 8
+}
 run_idaten() {   # $1 組番号
   local dir="$OUT_DIR/idaten-$1"
   mkdir -p "$dir"
   # --bench-isolated: セッション・履歴・ブックマーク・Cookie を専用の空ディレクトリに置く(Chrome の新品プロファイルと揃える)
-  open -g -n -a "$ROOT/build/Idaten.app" --args --bench-isolated "$dir" "${URLS[@]}" "$VIDEO_URL"
+  open -n -a "$ROOT/build/Idaten.app" --args --bench-isolated "$dir" "${URLS[@]}" ${VIDEO_ARGS[@]+"${VIDEO_ARGS[@]}"}
   sleep "$LOAD_WAIT"
   local pid; pid=$(pgrep -f "Idaten.app/Contents/MacOS/Idaten --bench-isolated" | head -1)
   [ -n "$pid" ] || { echo "idaten pid なし(組 $1)" | tee -a "$OUT_DIR/errors.txt"; return 1; }
@@ -144,7 +173,7 @@ run_idaten() {   # $1 組番号
   sleep 8
 }
 
-start_video_server || exit 1
+if [ "$NO_VIDEO" != 1 ]; then start_video_server || exit 1; fi
 trap stop_video_server EXIT
 
 printf 'name\tpoint\tmedian_mib\tpeak_mib\tprocs_median\tsamples\n' > "$OUT_DIR/summary.tsv"
@@ -159,6 +188,8 @@ for i in $(seq 1 "$PAIRS"); do
       idaten) run_idaten "$i" || true ;;
       chrome_ext) run_chrome_ext "$i" || true ;;
       fork_ext) run_fork_ext "$i" || true ;;
+      helium) run_plain "$i" helium "$HELIUM_BIN" - || true ;;
+      forkhib) run_plain "$i" forkhib "$HIB_BIN" "$HIB_EXT_ID" || true ;;
     esac
   done
 done
