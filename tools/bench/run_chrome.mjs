@@ -18,6 +18,9 @@ if (!profile || !seconds || !extDir || urls.length === 0) {
 const CHROME = process.env.BROWSER_BIN || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const args = [
   `--user-data-dir=${profile}`, '--remote-debugging-pipe', '--no-first-run', '--no-default-browser-check',
+  // キーチェーンに触らない。署名の違う版を起動すると許可ダイアログが出て、無人の夜間計測では固まる
+  // (09-29 03:22 securityd: displaying keychain prompt for …/hibernate…/Idaten.app)。全条件に付けて揃える
+  '--use-mock-keychain',
 ];
 if (extDir !== '-') args.push('--enable-unsafe-extension-debugging');
 args.push('about:blank');

@@ -498,6 +498,9 @@ final class BrowserWindowController: NSObject, NSWindowDelegate, NSTextFieldDele
         installContextMenuBridge(conf)
         conf.applicationNameForUserAgent = settings.userAgentSuffix
         conf.preferences.isElementFullscreenEnabled = true
+        // 音の無い動画(muted autoplay)は自動再生を許す。音のある再生だけ利用者の操作を要る(Chromium/Safari と同じ方針)。
+        // 既定のままだと muted autoplay の動画も止まったままだった(09-29 の計測: 窓は前面・readyState 4・error なしで t=0)
+        conf.mediaTypesRequiringUserActionForPlayback = .audio
         for l in ruleLists { conf.userContentController.add(l) }
         return conf
     }
