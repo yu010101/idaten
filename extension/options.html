@@ -9,8 +9,13 @@
   #status { color: GrayText; margin-top: 10px; font-size: 12px; }
   #now-stats { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
   .hint { color: GrayText; font-size: 11px; margin-top: 3px; }
+  #state { font-size: 13px; margin-bottom: 2px; }
+  #state .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; background: #555; }
+  #savings { font-size: 12px; margin-bottom: 4px; }
 </style>
 <div id="now-stats">計測中…</div>
+<div id="state"><span class="dot"></span><span id="state-text">状態: 計測中…</span></div>
+<div id="savings"></div>
 <label for="budget">起きている背景タブの上限</label>
 <input id="budget" type="number" min="1" max="50">
 <label for="idle">使っていないタブを眠らせるまでの分(0で無効)</label>
