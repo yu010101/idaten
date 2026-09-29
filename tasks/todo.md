@@ -304,3 +304,15 @@
       forkhib はキーチェーンの許可ダイアログで固まっていた(securityd 03:22:13、履歴0件・video.html への GET 0件)。forkhib 765 MiB は無効
       有効だったのは Chrome 4,830〜5,959 / 素の Helium 1,528〜1,603(300s、両方とも動画再生を確認)
 - [~] 修正(08eecf2): WebKit は muted autoplay を許可(.audio)、起動器は --use-mock-keychain。bench7 を 09-30 02:00 に予約
+
+## 2026-09-29 リリース準備と「今やって」4件
+- [x] Developer ID Application(RADINEER、K7CD7UAWWC、G2、期限 2031-09-17)を発行。秘密鍵と一致を確認、login キーチェーンに登録、CI の secrets に登録
+- [x] 公証は既存の App Store Connect チームキー(77XTUTQL3A)で。フォークの sign_and_package_app.sh を API キー対応に(55854c6)。CI 署名ビルド run 36521041855 走行中
+- [x] 手元で署名(16部品・hardened runtime・Chromium 標準の entitlements)→ 公証 Accepted → staple → dmg も公証 Accepted。
+      `~/idaten-fork/dist/release-local/Idaten-0.17.2.2-arm64.dmg`(sha256 4c9879fb…43cb)。m4 で起動検査: 休眠拡張起動・13/14 読込・動画再生・クラッシュ記録なし
+- [x] WebKit タブ判定(m4、5組、事前固定の式): 有効4組、軽さの中央値 49.9% → 基準 30% 以上。bench8 でこの Mac でも確認する
+- [x] 引っ越し: Swift 版の chromium-profile → ~/Library/Application Support/dev.idaten.chromium にコピー(元は残す)。
+      9/25 の仮プロファイルは dev.idaten.chromium.test-20260925 に退避。~/Applications/Idaten.app を公証済み版に置換(Swift 版は ~/idaten-fork/backup/)。
+      ログインはやり直し(キーチェーンの鍵が別)。**本人の初回起動はまだ**
+- [~] 公開向けの数字: bench8(09-30 01:30、chrome / forkhib=公証版 / idaten、各10組)。200タブ版は翌晩(予行演習してから)
+- [~] WebKit タブ PoC パッチ・メモリ予算と見える化: サブエージェントが下書き中(適用はメインが検証してから)
