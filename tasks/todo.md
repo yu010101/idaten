@@ -300,3 +300,7 @@
 - **無効条件**: どちらかの条件で、動画(video.html)の再生が確認できない回がある(state.jsonl の video / run の videoPlaying)、
   または forkhib で組み込み拡張(aacggnjhnfocojdoneibokaddkjnmghn)が起きていない回がある → その組は判定から外す。有効な組が3未満なら判定しない
 - 注意: WebKit タブは拡張・Cookie 共有が効かない(乗り換えの最大の壁 0.42〜0.65 が戻る)。軽さだけで決めてよいかは結果を見て本人と再確認
+- [x] bench6(09-29)は**判定不能**(事前の無効条件に該当): WebKit は5組とも動画 t=0(前面・readyState 4・error なし=自動再生の制止)、
+      forkhib はキーチェーンの許可ダイアログで固まっていた(securityd 03:22:13、履歴0件・video.html への GET 0件)。forkhib 765 MiB は無効
+      有効だったのは Chrome 4,830〜5,959 / 素の Helium 1,528〜1,603(300s、両方とも動画再生を確認)
+- [~] 修正(08eecf2): WebKit は muted autoplay を許可(.audio)、起動器は --use-mock-keychain。bench7 を 09-30 02:00 に予約
