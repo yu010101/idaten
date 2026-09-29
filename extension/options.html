@@ -7,11 +7,17 @@
   textarea { height: 70px; }
   .row { display: flex; gap: 8px; margin-top: 12px; }
   #status { color: GrayText; margin-top: 10px; font-size: 12px; }
+  #now-stats { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+  .hint { color: GrayText; font-size: 11px; margin-top: 3px; }
 </style>
+<div id="now-stats">計測中…</div>
 <label for="budget">起きている背景タブの上限</label>
 <input id="budget" type="number" min="1" max="50">
 <label for="idle">使っていないタブを眠らせるまでの分(0で無効)</label>
 <input id="idle" type="number" min="0" max="1440">
+<label for="mem">メモリ予算(MB、0で無効)</label>
+<input id="mem" type="number" min="0" max="262144" step="256" placeholder="例 2048">
+<div class="hint">ブラウザ全体の実測メモリが予算の90%を超えたら、古い背景タブから眠らせます(80%まで)</div>
 <label for="never">眠らせないドメイン(1行に1つ。サブドメインも含む)</label>
 <textarea id="never" placeholder="meet.google.com&#10;zoom.us"></textarea>
 <div class="row"><button id="save">保存</button><button id="now">今すぐ適用</button></div>
