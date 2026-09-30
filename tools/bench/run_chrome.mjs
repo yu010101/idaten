@@ -23,6 +23,8 @@ const args = [
   '--use-mock-keychain',
 ];
 if (extDir !== '-') args.push('--enable-unsafe-extension-debugging');
+// EXTRA_FLAGS: 追加の起動オプション(空白区切り)。例: --enable-idaten-webkit-tab
+for (const f of (process.env.EXTRA_FLAGS || '').split(/\s+/).filter(Boolean)) args.push(f);
 args.push('about:blank');
 
 const p = spawn(CHROME, args, { stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'] });
@@ -65,7 +67,20 @@ if (extDir !== '-') {
   }
 }
 
-for (const url of urls) { await send('Target.createTarget', { url }); await sleep(400); }
+// NEUTRAL_HIB=1: 同梱の休眠拡張を止める(上限999枚・放置で眠らせない)。タブが眠ると比較にならないため
+if (process.env.NEUTRAL_HIB === '1') {
+  const HIB = 'aacggnjhnfocojdoneibokaddkjnmghn';
+  const tg = (await send('Target.getTargets', { filter: [{}] })).result?.targetInfos ?? [];
+  const sw = tg.find(t => t.type === 'service_worker' && (t.url || '').includes(HIB));
+  if (!sw) { console.error('休眠拡張の service worker が見つからない'); p.kill(); process.exit(1); }
+  const s0 = (await send('Target.attachToTarget', { targetId: sw.targetId, flatten: true })).result?.sessionId;
+  const r0 = await send('Runtime.evaluate', { expression: `chrome.storage.sync.set({budget: 999, idleMinutes: 0}).then(() => chrome.storage.sync.get(null)).then(v => JSON.stringify(v))`, awaitPromise: true, returnByValue: true }, s0);
+  console.error('休眠拡張の設定:', r0.result?.result?.value);
+  await send('Target.detachFromTarget', { sessionId: s0 });
+}
+// WEBKIT_TABS=1: 各 URL を WebKit のタブ(試作版の入口 about:blank#idaten-webkit=<URL>)として開く
+const wrap = u => process.env.WEBKIT_TABS === '1' && /^https?:/.test(u) ? 'about:blank#idaten-webkit=' + encodeURIComponent(u) : u;
+for (const url of urls) { await send('Target.createTarget', { url: wrap(url) }); await sleep(400); }
 await sleep(6000);
 
 const targets0 = (await send('Target.getTargets', { filter: [{}] })).result?.targetInfos ?? [];
